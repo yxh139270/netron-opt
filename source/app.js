@@ -5,7 +5,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as process from 'process';
-import * as updater from 'electron-updater';
 import * as url from 'url';
 
 const app = {};
@@ -121,7 +120,6 @@ app.Application = class {
         });
 
         this._parseCommandLine(process.argv);
-        await this._checkForUpdates();
     }
 
     get environment() {
@@ -288,24 +286,6 @@ app.Application = class {
         const view = this._views.activeView;
         if (view && view.path) {
             view.open(view.path);
-        }
-    }
-
-    async _checkForUpdates() {
-        if (!electron.app.isPackaged) {
-            return;
-        }
-        const autoUpdater = updater.default.autoUpdater;
-        if (autoUpdater.app && autoUpdater.app.appUpdateConfigPath && !fs.existsSync(autoUpdater.app.appUpdateConfigPath)) {
-            return;
-        }
-        const promise = autoUpdater.checkForUpdates();
-        if (promise) {
-            promise.catch((error) => {
-                /* eslint-disable no-console */
-                console.log(error.message);
-                /* eslint-enable no-console */
-            });
         }
     }
 
