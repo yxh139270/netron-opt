@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as url from 'url';
 
 const args = process.argv.slice(2);
+const python = 'python3';
 
 const read = (match) => {
     if (args.length > 0 && (!match || args[0] === match)) {
@@ -228,8 +229,8 @@ const install = async () => {
         await exec('npm install');
     }
     try {
-        await exec('python --version', 'utf-8');
-        await exec('python -m pip install --upgrade --quiet setuptools ruff');
+        await exec(`${python} --version`, 'utf-8');
+        await exec(`${python} -m pip install --upgrade --quiet setuptools ruff`);
     } catch {
         // continue regardless of error
     }
@@ -285,11 +286,11 @@ const build = async (target) => {
         }
         case 'python': {
             writeLine('build python');
-            await exec('python package.py build version');
-            await exec('python -m pip install --user build wheel --quiet');
-            await exec('python -m build --wheel --outdir dist/pypi dist/pypi');
+            await exec(`${python} package.py build version`);
+            await exec(`${python} -m pip install --user build wheel --quiet`);
+            await exec(`${python} -m build --wheel --outdir dist/pypi dist/pypi`);
             if (read('install')) {
-                await exec('python -m pip install --force-reinstall dist/pypi/*.whl');
+                await exec(`${python} -m pip install --force-reinstall dist/pypi/*.whl`);
             }
             break;
         }
@@ -346,8 +347,8 @@ const publish = async (target) => {
         case 'python': {
             writeLine('publish python');
             await build('python');
-            await exec('python -m pip install --user twine');
-            await exec('python -m twine upload --non-interactive --skip-existing --verbose dist/pypi/*.whl');
+            await exec(`${python} -m pip install --user twine`);
+            await exec(`${python} -m twine upload --non-interactive --skip-existing --verbose dist/pypi/*.whl`);
             break;
         }
         case 'cask': {
@@ -511,7 +512,7 @@ const lint = async () => {
     writeLine('eslint');
     await exec('npx eslint --cache --cache-location ./dist/lint/.eslintcache');
     writeLine('ruff');
-    await exec('python -m ruff check . --quiet');
+    await exec(`${python} -m ruff check . --quiet`);
 };
 
 const test = async (target) => {

@@ -1,6 +1,6 @@
 
 import * as base from './base.js';
-import * as grapher from './grapher.js';
+import * as grapher from './mycelium.js';
 
 const view = {};
 const markdown = {};
