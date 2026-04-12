@@ -30,6 +30,7 @@
         "pull": "node package.js pull"
     },
     "dependencies": {
+        "d3-dag": "^1.1.0",
         "electron-updater": "6.8.3"
     },
     "devDependencies": {

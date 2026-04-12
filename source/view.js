@@ -8,6 +8,13 @@ const png = {};
 const metadata = {};
 const metrics = {};
 
+const now = () => {
+    if (typeof performance !== 'undefined' && performance.now) {
+        return performance.now();
+    }
+    return Date.now();
+};
+
 view.View = class {
 
     constructor(host) {
@@ -17,7 +24,8 @@ view.View = class {
             attributes: false,
             names: false,
             direction: 'vertical',
-            mousewheel: 'scroll'
+            mousewheel: 'scroll',
+            layoutEngine: 'dagre'
         };
         this._options = { ...this._defaultOptions };
         this._events = {};
@@ -175,6 +183,21 @@ view.View = class {
                     label: () => this.options.mousewheel === 'scroll' ? '&Mouse Wheel: Zoom' : '&Mouse Wheel: Scroll',
                     accelerator: 'CmdOrCtrl+M',
                     execute: () => this.toggle('mousewheel'),
+                    enabled: () => this.activeTarget
+                });
+                view.add({
+                    label: () => this.options.layoutEngine === 'dagre' ? 'Layout Engine: &d3-dag' : 'Layout Engine: &Dagre',
+                    execute: () => this.toggle('layoutEngine'),
+                    enabled: () => this.activeTarget
+                });
+                view.add({
+                    label: () => this.options.layoutEngine === 'd3dag-fast-sugi' ? 'Layout Mode: Fast Sugiyama (On)' : 'Layout Mode: Fast Sugiyama (Off)',
+                    execute: () => this.toggle('layoutEngineFast'),
+                    enabled: () => this.activeTarget
+                });
+                view.add({
+                    label: () => this.options.layoutEngine === 'd3dag-zherebko' ? 'Layout Mode: Zherebko (On)' : 'Layout Mode: Zherebko (Off)',
+                    execute: () => this.toggle('layoutEngineZherebko'),
                     enabled: () => this.activeTarget
                 });
                 view.add({});
@@ -359,6 +382,18 @@ view.View = class {
                 break;
             case 'mousewheel':
                 this._options.mousewheel = this._options.mousewheel === 'scroll' ? 'zoom' : 'scroll';
+                break;
+            case 'layoutEngine':
+                this._options.layoutEngine = this._options.layoutEngine === 'dagre' ? 'd3dag' : 'dagre';
+                this._reload();
+                break;
+            case 'layoutEngineFast':
+                this._options.layoutEngine = this._options.layoutEngine === 'd3dag-fast-sugi' ? 'dagre' : 'd3dag-fast-sugi';
+                this._reload();
+                break;
+            case 'layoutEngineZherebko':
+                this._options.layoutEngine = this._options.layoutEngine === 'd3dag-zherebko' ? 'dagre' : 'd3dag-zherebko';
+                this._reload();
                 break;
             default:
                 throw new view.Error(`Unsupported toggle '${name}'.`);
@@ -913,6 +948,8 @@ view.View = class {
     }
 
     async render(target, signature) {
+        const profile = {};
+        const t0 = now();
         this.target = null;
         const element = this._element('target');
         while (element.lastChild) {
@@ -935,14 +972,28 @@ view.View = class {
             }
             viewGraph.add(graph, signature);
             viewGraph.addTunnels();
+            profile.setup = now() - t0;
+            const t1 = now();
             viewGraph.build(document);
+            profile.build = now() - t1;
+            const t2 = now();
             await viewGraph.measure();
+            profile.measure = now() - t2;
+            const t3 = now();
             status = await viewGraph.layout(this._worker);
+            profile.layout = now() - t3;
             if (status === '') {
+                const t4 = now();
                 viewGraph.update();
                 viewGraph.updateTunnels();
                 viewGraph.restore(state);
+                profile.update = now() - t4;
                 this.target = viewGraph;
+                this._lastRenderProfile = {
+                    ...profile,
+                    layoutDetail: viewGraph.profile ? viewGraph.profile.layout : null,
+                    total: now() - t0
+                };
             }
         }
         return status;
