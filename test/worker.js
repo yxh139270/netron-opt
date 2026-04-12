@@ -84,6 +84,9 @@ export class Target {
         if (process.env.NETRON_LAYOUT_ENGINE) {
             this.view.options.layoutEngine = process.env.NETRON_LAYOUT_ENGINE;
         }
+        if (process.env.NETRON_RENDER_ENGINE) {
+            this.view.options.renderEngine = process.env.NETRON_RENDER_ENGINE;
+        }
         const time = async (method) => {
             const start = process.hrtime.bigint();
             let err = null;

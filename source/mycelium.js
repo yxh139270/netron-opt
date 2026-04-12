@@ -121,6 +121,7 @@ mycelium.Graph = class {
 
     build(document, origin) {
         origin = origin || document.getElementById('origin');
+        const useZRender = this.options && this.options.renderEngine === 'zrender';
         const createGroup = (name) => {
             const element = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             element.setAttribute('id', name);
@@ -150,32 +151,34 @@ mycelium.Graph = class {
             element.appendChild(markerPath);
             return element;
         };
-        edgePathHitTestGroup.addEventListener('pointerover', (e) => {
-            if (this._focused) {
-                this._focused.blur();
-                this._focused = null;
-            }
-            const edge = this._focusable.get(e.target);
-            if (edge && edge.focus) {
-                edge.focus();
-                this._focused = edge;
-                e.stopPropagation();
-            }
-        });
-        edgePathHitTestGroup.addEventListener('pointerleave', (e) => {
-            if (this._focused) {
-                this._focused.blur();
-                this._focused = null;
-                e.stopPropagation();
-            }
-        });
-        edgePathHitTestGroup.addEventListener('click', (e) => {
-            const edge = this._focusable.get(e.target);
-            if (edge && edge.activate) {
-                edge.activate();
-                e.stopPropagation();
-            }
-        });
+        if (!useZRender) {
+            edgePathHitTestGroup.addEventListener('pointerover', (e) => {
+                if (this._focused) {
+                    this._focused.blur();
+                    this._focused = null;
+                }
+                const edge = this._focusable.get(e.target);
+                if (edge && edge.focus) {
+                    edge.focus();
+                    this._focused = edge;
+                    e.stopPropagation();
+                }
+            });
+            edgePathHitTestGroup.addEventListener('pointerleave', (e) => {
+                if (this._focused) {
+                    this._focused.blur();
+                    this._focused = null;
+                    e.stopPropagation();
+                }
+            });
+            edgePathHitTestGroup.addEventListener('click', (e) => {
+                const edge = this._focusable.get(e.target);
+                if (edge && edge.activate) {
+                    edge.activate();
+                    e.stopPropagation();
+                }
+            });
+        }
         edgePathGroupDefs.appendChild(marker('arrowhead'));
         edgePathGroupDefs.appendChild(marker('arrowhead-select'));
         edgePathGroupDefs.appendChild(marker('arrowhead-hover'));
@@ -201,9 +204,11 @@ mycelium.Graph = class {
         this._focusable.clear();
         this._focused = null;
         for (const edge of this.edges.values()) {
-            edge.label.build(document, edgePathGroup, edgePathHitTestGroup, edgeLabelGroup);
-            if (edge.label.hitTest) {
-                this._focusable.set(edge.label.hitTest, edge.label);
+            if (!useZRender) {
+                edge.label.build(document, edgePathGroup, edgePathHitTestGroup, edgeLabelGroup);
+                if (edge.label.hitTest) {
+                    this._focusable.set(edge.label.hitTest, edge.label);
+                }
             }
         }
         const tunnelGroup = createGroup('tunnel-edges');
