@@ -797,8 +797,10 @@ mycelium.Edge = class {
             if (!this.element.classList.contains('select')) {
                 const path = this.element;
                 path.classList.add('select');
-                this.element = path.cloneNode(true);
-                path.parentNode.replaceChild(this.element, path);
+                if (path.parentNode) {
+                    this.element = path.cloneNode(true);
+                    path.parentNode.replaceChild(this.element, path);
+                }
             }
             return [this.element];
         }
@@ -809,8 +811,10 @@ mycelium.Edge = class {
         if (this.element && this.element.classList.contains('select')) {
             const path = this.element;
             path.classList.remove('select');
-            this.element = path.cloneNode(true);
-            path.parentNode.replaceChild(this.element, path);
+            if (path.parentNode) {
+                this.element = path.cloneNode(true);
+                path.parentNode.replaceChild(this.element, path);
+            }
         }
     }
 };

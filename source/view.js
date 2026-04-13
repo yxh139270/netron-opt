@@ -461,6 +461,7 @@ view.View = class {
         }
         const document = this._host.document;
         const container = document.getElementById('target');
+        const fallbackScroll = container ? { left: container.scrollLeft, top: container.scrollTop } : null;
         const zoom = this._target ? this._target._zoom : 1;
         const blocks = this._target ? this._target.blocks : null;
         if (blocks && blocks.size > 0 && this._path.length > 0) {
@@ -519,18 +520,26 @@ view.View = class {
         if (this._target) {
             this._target.zoom = zoom;
             if (container && anchor) {
+                let anchored = false;
                 const anchorNode = this._target.find(anchor.value);
                 if (anchorNode instanceof grapher.Node && anchorNode.element) {
-                    let newRect = anchorNode.element.getBoundingClientRect();
-                    if (anchorNode.definition && anchorNode.definition.element) {
-                        newRect = anchorNode.definition.element.getBoundingClientRect();
+                    const element = anchorNode.definition && anchorNode.definition.element ? anchorNode.definition.element : anchorNode.element;
+                    if (element && element.isConnected) {
+                        const newRect = element.getBoundingClientRect();
+                        if (Number.isFinite(newRect.left) && Number.isFinite(newRect.top) && anchor.rect && Number.isFinite(anchor.rect.left) && Number.isFinite(anchor.rect.top)) {
+                            if (container.scrollWidth > container.clientWidth) {
+                                container.scrollLeft += (newRect.left - anchor.rect.left);
+                            }
+                            if (container.scrollHeight > container.clientHeight) {
+                                container.scrollTop += (newRect.top - anchor.rect.top);
+                            }
+                            anchored = true;
+                        }
                     }
-                    if (container.scrollWidth > container.clientWidth) {
-                        container.scrollLeft += (newRect.left - anchor.rect.left);
-                    }
-                    if (container.scrollHeight > container.clientHeight) {
-                        container.scrollTop += (newRect.top - anchor.rect.top);
-                    }
+                }
+                if (!anchored && fallbackScroll) {
+                    container.scrollLeft = fallbackScroll.left;
+                    container.scrollTop = fallbackScroll.top;
                 }
                 delete this._target._scrollLeft;
                 delete this._target._scrollTop;
@@ -2929,6 +2938,15 @@ view.Node = class extends grapher.Node {
     _add(value, type) {
         const node = (type === 'graph' || type === 'function') ? { type: value } : value;
         const options = this.context.options;
+        const toggleInlineBlock = (target, anchor) => {
+            const rect = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+            if (this.context.blocks.has(target)) {
+                this.context.blocks.delete(target);
+            } else {
+                this.context.blocks.add(target);
+            }
+            this.context.view.refresh({ value: this.value, rect });
+        };
         const header =  this.header();
         const category = node.type && node.type.category ? node.type.category : '';
         if (node.type && typeof node.type.name !== 'string' || !node.type.name.split) { // #416
@@ -2955,10 +2973,10 @@ view.Node = class extends grapher.Node {
         });
         if (type === 'graph') {
             this.definition = header.add(null, styles);
-            this.definition.content = '\u25CB';
-            this.definition.tooltip = 'Show Graph';
+            this.definition.content = this.context.blocks.has(value) ? '\u2212' : '\u25CB';
+            this.definition.tooltip = this.context.blocks.has(value) ? 'Collapse Graph' : 'Expand Graph';
             this.definition.padding = 4;
-            this.definition.on('click', async () => await this.context.view.pushTarget(value, this.value));
+            this.definition.on('click', () => toggleInlineBlock(value, this.definition.element));
             const expanded = this.context.blocks.has(value);
             const icon = expanded ? '\u2212' : '+';
             const tooltip = expanded ? 'Collapse Graph' : 'Expand Graph';
@@ -2967,17 +2985,11 @@ view.Node = class extends grapher.Node {
             this.expander.tooltip = tooltip;
             this.expander.padding = 6;
             this.expander.on('click', () => {
-                const rect = this.expander.element.getBoundingClientRect();
-                if (this.context.blocks.has(value)) {
-                    this.context.blocks.delete(value);
-                } else {
-                    this.context.blocks.add(value);
-                }
-                this.context.view.refresh({ value: this.value, rect });
+                toggleInlineBlock(value, this.expander.element);
             });
         } else if (node.type.type || (Array.isArray(node.type.nodes) && node.type.nodes.length > 0)) {
             let icon = '\u0192';
-            let tooltip = 'Show Function Definition';
+            let tooltip = this.context.blocks.has(node.type) ? 'Collapse Function Definition' : 'Expand Function Definition';
             if (node.type.type === 'weights') {
                 icon = '\u25CF';
                 tooltip = 'Show Weights';
@@ -2985,7 +2997,7 @@ view.Node = class extends grapher.Node {
             this.definition = header.add(null, styles);
             this.definition.content = icon;
             this.definition.tooltip = tooltip;
-            this.definition.on('click', async () => await this.context.view.pushTarget(node.type, this.value));
+            this.definition.on('click', () => toggleInlineBlock(node.type, this.definition.element));
         }
         let current = null;
         const list = () => {
@@ -3075,10 +3087,17 @@ view.Node = class extends grapher.Node {
             const item = list().argument('\u3008\u2026\u3009', '');
             list().add(item);
         }
+        if (type !== 'graph' && type !== 'function' && node.type && this.context.blocks.has(node.type) && (node.type.type || (Array.isArray(node.type.nodes) && node.type.nodes.length > 0))) {
+            const content = this.context.createGraph(node.type, 'function');
+            content.blocks.push(new view.Block(this.context.view, node.type, this.context.blocks));
+            content.activate = () => this.context.view.showTargetProperties(node.type);
+            const item = list().argument('definition', content);
+            list().add(item);
+        }
         for (const argument of objects) {
             const type = argument.type;
             let content = null;
-            if (type === 'graph' && this.context.blocks.has(argument.value)) {
+            if ((type === 'graph' || type === 'function') && this.context.blocks.has(argument.value)) {
                 content = this.context.createGraph(argument.value);
                 content.blocks.push(new view.Block(this.context.view, argument.value, this.context.blocks));
                 content.activate = () => this.context.view.showTargetProperties(argument.value);
