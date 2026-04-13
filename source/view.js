@@ -499,12 +499,11 @@ view.View = class {
                         origin.removeChild(child);
                     }
                 }
-                viewGraph.update();
-                viewGraph.updateTunnels();
                 origin.setAttribute('transform', 'translate(0,0) scale(1)');
                 document.getElementById('background').setAttribute('width', 0);
                 document.getElementById('background').setAttribute('height', 0);
                 viewGraph.restore(state);
+                viewGraph._updateViewport();
                 this.target = viewGraph;
             } else {
                 for (const child of Array.from(origin.children)) {
@@ -972,9 +971,8 @@ view.View = class {
                 status = await viewGraph.layout(this._worker, { estimateOnly: false });
             }
             if (status === '') {
-                viewGraph.update();
-                viewGraph.updateTunnels();
                 viewGraph.restore(state);
+                viewGraph._updateViewport();
                 this.target = viewGraph;
             }
         }
@@ -2485,7 +2483,12 @@ view.Graph = class extends grapher.Graph {
                 elements.push(nodeElements[0]);
             }
         }
-        const size = canvas.getBBox();
+        const size = Number.isFinite(this.width) && Number.isFinite(this.height) ? {
+            x: Number.isFinite(this.originX) ? this.originX : 0,
+            y: Number.isFinite(this.originY) ? this.originY : 0,
+            width: this.width,
+            height: this.height
+        } : canvas.getBBox();
         const margin = 100;
         const width = Math.ceil(margin + size.width + margin);
         const height = Math.ceil(margin + size.height + margin);
@@ -2501,6 +2504,7 @@ view.Graph = class extends grapher.Graph {
         canvas.setAttribute('height', height);
         this._zoom = state ? state.zoom : 1;
         this._updateZoom(this._zoom);
+        this._updateViewport();
         const container = document.getElementById('target');
         const context = state ? this.select([state.context]) : [];
         if (context.length > 0) {
@@ -2533,6 +2537,58 @@ view.Graph = class extends grapher.Graph {
             const top = (container.scrollTop + (canvasRect.height / 2) - graphRect.top) - (graphRect.height / 2);
             container.scrollTo({ left, top, behavior: 'auto' });
         }
+        this._updateViewport();
+    }
+
+    _computeViewport() {
+        const document = this.host.document;
+        const container = document.getElementById('target');
+        const canvas = document.getElementById('canvas');
+        const origin = document.getElementById('origin');
+        if (!container || !canvas || !origin || !this._zoom) {
+            return null;
+        }
+        const buffer = 220;
+        const ctm = origin.getScreenCTM();
+        if (ctm && typeof ctm.inverse === 'function' && typeof canvas.createSVGPoint === 'function') {
+            const inverse = ctm.inverse();
+            const point = canvas.createSVGPoint();
+            const bounds = container.getBoundingClientRect();
+            point.x = bounds.left;
+            point.y = bounds.top;
+            const p1 = point.matrixTransform(inverse);
+            point.x = bounds.right;
+            point.y = bounds.bottom;
+            const p2 = point.matrixTransform(inverse);
+            return {
+                left: Math.min(p1.x, p2.x) - buffer,
+                top: Math.min(p1.y, p2.y) - buffer,
+                right: Math.max(p1.x, p2.x) + buffer,
+                bottom: Math.max(p1.y, p2.y) + buffer
+            };
+        }
+        const transform = origin.getAttribute('transform') || '';
+        const match = /translate\(([-0-9.]+),\s*([-0-9.]+)\)/.exec(transform);
+        const tx = match ? Number(match[1]) : 0;
+        const ty = match ? Number(match[2]) : 0;
+        const zoom = this._zoom || 1;
+        const left = (container.scrollLeft / zoom) - tx;
+        const top = (container.scrollTop / zoom) - ty;
+        const right = ((container.scrollLeft + container.clientWidth) / zoom) - tx;
+        const bottom = ((container.scrollTop + container.clientHeight) / zoom) - ty;
+        return {
+            left: left - buffer,
+            top: top - buffer,
+            right: right + buffer,
+            bottom: bottom + buffer
+        };
+    }
+
+    _updateViewport() {
+        const viewport = this._computeViewport();
+        this.setViewport(viewport);
+        super.update();
+        this.updateTunnels();
     }
 
     register() {
@@ -2600,6 +2656,7 @@ view.Graph = class extends grapher.Graph {
         container.scrollLeft = this._scrollLeft;
         container.scrollTop = this._scrollTop;
         this._zoom = zoom;
+        this._updateViewport();
     }
 
     _pointerDownHandler(e) {
@@ -2634,6 +2691,7 @@ view.Graph = class extends grapher.Graph {
                     const container = document.getElementById('target');
                     container.scrollTop = this._mousePosition.top - dy;
                     container.scrollLeft = this._mousePosition.left - dx;
+                    this._updateViewport();
                 }
             }
         };
@@ -2725,6 +2783,7 @@ view.Graph = class extends grapher.Graph {
         if (this._scrollTop && e.target.scrollTop !== Math.floor(this._scrollTop)) {
             delete this._scrollTop;
         }
+        this._updateViewport();
     }
 
     _wheelHandler(e) {

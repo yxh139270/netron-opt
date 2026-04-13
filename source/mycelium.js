@@ -112,6 +112,62 @@ mycelium.Graph = class {
         }
     }
 
+    setViewport(viewport) {
+        this._viewport = viewport || null;
+    }
+
+    _rectIntersects(a, b) {
+        return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
+    }
+
+    _nodeBounds(node) {
+        const width = Number.isFinite(node.width) ? node.width : 0;
+        const height = Number.isFinite(node.height) ? node.height : 0;
+        const x = Number.isFinite(node.x) ? node.x : 0;
+        const y = Number.isFinite(node.y) ? node.y : 0;
+        return {
+            left: x - width / 2,
+            top: y - height / 2,
+            right: x + width / 2,
+            bottom: y + height / 2
+        };
+    }
+
+    _edgeVisible(edge, viewport) {
+        if (!Array.isArray(edge.points) || edge.points.length === 0) {
+            return true;
+        }
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const point of edge.points) {
+            minX = Math.min(minX, point.x);
+            minY = Math.min(minY, point.y);
+            maxX = Math.max(maxX, point.x);
+            maxY = Math.max(maxY, point.y);
+        }
+        if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
+            return true;
+        }
+        return this._rectIntersects({ left: minX, top: minY, right: maxX, bottom: maxY }, viewport);
+    }
+
+    _mount(element) {
+        if (!element || element.parentNode || !element._virtualParent) {
+            return;
+        }
+        element._virtualParent.appendChild(element);
+    }
+
+    _unmount(element) {
+        if (!element || !element.parentNode) {
+            return;
+        }
+        element._virtualParent = element.parentNode;
+        element.parentNode.removeChild(element);
+    }
+
     build(document, origin) {
         origin = origin || document.getElementById('origin');
         const createGroup = (name) => {
@@ -351,23 +407,58 @@ mycelium.Graph = class {
     }
 
     update() {
+        const viewport = this._viewport;
         for (const nodeId of this.nodes.keys()) {
             if (this.children(nodeId).length === 0) {
                 const entry = this.node(nodeId);
                 const node = entry.label;
-                node.update();
+                let visible = true;
+                if (viewport) {
+                    const bounds = this._nodeBounds(node);
+                    visible = this._rectIntersects(bounds, viewport);
+                }
+                if (visible) {
+                    this._mount(node.element);
+                    node.update();
+                } else {
+                    this._unmount(node.element);
+                }
             } else {
                 const entry = this.node(nodeId);
                 const node = entry.label;
-                node.element.setAttribute('transform', `translate(${node.x},${node.y})`);
-                node.rectangle.setAttribute('x', -node.width / 2);
-                node.rectangle.setAttribute('y', -node.height / 2);
-                node.rectangle.setAttribute('width', node.width);
-                node.rectangle.setAttribute('height', node.height);
+                let visible = true;
+                if (viewport) {
+                    const bounds = this._nodeBounds(node);
+                    visible = this._rectIntersects(bounds, viewport);
+                }
+                if (visible) {
+                    this._mount(node.element);
+                    node.element.setAttribute('transform', `translate(${node.x},${node.y})`);
+                    node.rectangle.setAttribute('x', -node.width / 2);
+                    node.rectangle.setAttribute('y', -node.height / 2);
+                    node.rectangle.setAttribute('width', node.width);
+                    node.rectangle.setAttribute('height', node.height);
+                } else {
+                    this._unmount(node.element);
+                }
             }
         }
         for (const edge of this.edges.values()) {
-            edge.label.update();
+            const label = edge.label;
+            let visible = true;
+            if (viewport) {
+                visible = this._edgeVisible(label, viewport);
+            }
+            if (visible) {
+                this._mount(label.element);
+                this._mount(label.hitTest);
+                this._mount(label.labelElement);
+                label.update();
+            } else {
+                this._unmount(label.element);
+                this._unmount(label.hitTest);
+                this._unmount(label.labelElement);
+            }
         }
     }
 };
