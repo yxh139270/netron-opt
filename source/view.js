@@ -17,7 +17,9 @@ view.View = class {
             attributes: false,
             names: false,
             direction: 'vertical',
-            mousewheel: 'scroll'
+            mousewheel: 'scroll',
+            layoutEstimateMode: 'auto',
+            layoutEstimateThreshold: 1500
         };
         this._options = { ...this._defaultOptions };
         this._events = {};
@@ -169,6 +171,14 @@ view.View = class {
                     label: () => this.options.direction === 'vertical' ? 'Show &Horizontal' : 'Show &Vertical',
                     accelerator: 'CmdOrCtrl+K',
                     execute: () => this.toggle('direction'),
+                    enabled: () => this.activeTarget
+                });
+                view.add({
+                    label: () => {
+                        const mode = this.options.layoutEstimateMode === 'on' ? 'On' : this.options.layoutEstimateMode === 'off' ? 'Off' : 'Auto';
+                        return `Layout &Estimate: ${mode}`;
+                    },
+                    execute: () => this.toggle('layoutEstimateMode'),
                     enabled: () => this.activeTarget
                 });
                 view.add({
@@ -357,6 +367,10 @@ view.View = class {
                 this._options.direction = this._options.direction === 'vertical' ? 'horizontal' : 'vertical';
                 this._reload();
                 break;
+            case 'layoutEstimateMode':
+                this._options.layoutEstimateMode = this._options.layoutEstimateMode === 'auto' ? 'on' : this._options.layoutEstimateMode === 'on' ? 'off' : 'auto';
+                this._reload();
+                break;
             case 'mousewheel':
                 this._options.mousewheel = this._options.mousewheel === 'scroll' ? 'zoom' : 'scroll';
                 break;
@@ -467,8 +481,18 @@ view.View = class {
             viewGraph.add(graph, this.activeSignature);
             viewGraph.addTunnels();
             viewGraph.build(document, origin);
-            await viewGraph.measure();
-            const status = await viewGraph.layout(this._worker);
+            const layoutOptions = this._layoutOptions(graph);
+            let status = '';
+            if (layoutOptions.estimateOnly) {
+                status = await viewGraph.layout(this._worker, layoutOptions);
+                if (status === '') {
+                    await viewGraph.measure();
+                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                }
+            } else {
+                await viewGraph.measure();
+                status = await viewGraph.layout(this._worker, { estimateOnly: false });
+            }
             if (status === '') {
                 for (const child of oldChildren) {
                     if (child.parentNode === origin) {
@@ -936,8 +960,17 @@ view.View = class {
             viewGraph.add(graph, signature);
             viewGraph.addTunnels();
             viewGraph.build(document);
-            await viewGraph.measure();
-            status = await viewGraph.layout(this._worker);
+            const layoutOptions = this._layoutOptions(graph);
+            if (layoutOptions.estimateOnly) {
+                status = await viewGraph.layout(this._worker, layoutOptions);
+                if (status === '') {
+                    await viewGraph.measure();
+                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                }
+            } else {
+                await viewGraph.measure();
+                status = await viewGraph.layout(this._worker, { estimateOnly: false });
+            }
             if (status === '') {
                 viewGraph.update();
                 viewGraph.updateTunnels();
@@ -946,6 +979,19 @@ view.View = class {
             }
         }
         return status;
+    }
+
+    _layoutOptions(graph) {
+        const threshold = Number.isFinite(this.options.layoutEstimateThreshold) ? this.options.layoutEstimateThreshold : 1500;
+        const count = graph && Array.isArray(graph.nodes) ? graph.nodes.length : 0;
+        const mode = this.options.layoutEstimateMode || 'auto';
+        if (mode === 'on') {
+            return { estimateOnly: true };
+        }
+        if (mode === 'off') {
+            return { estimateOnly: false };
+        }
+        return { estimateOnly: count >= threshold };
     }
 
     async export(file) {

@@ -218,9 +218,28 @@ mycelium.Graph = class {
         }
     }
 
-    async layout(worker) {
+    _estimateNodeSize(label) {
+        const text = label && (label.name || label.identifier || (label.type && label.type.name)) ?
+            (label.name || label.identifier || label.type.name) : '';
+        const textWidth = Math.min(420, Math.max(120, 40 + String(text).length * 7));
+        const hasBlocks = label && Array.isArray(label.blocks) && label.blocks.length > 0;
+        const blockCount = hasBlocks ? label.blocks.length : 1;
+        const estimatedHeight = Math.max(44, 26 + blockCount * 18);
+        return {
+            width: textWidth,
+            height: estimatedHeight
+        };
+    }
+
+    async layout(worker, options) {
+        const estimateOnly = options && options.estimateOnly;
         let nodes = [];
         for (const node of this.nodes.values()) {
+            const size = estimateOnly ? this._estimateNodeSize(node.label) : null;
+            if (size) {
+                node.label.width = size.width;
+                node.label.height = size.height;
+            }
             nodes.push({
                 v: node.v,
                 width: node.label.width || 0,
