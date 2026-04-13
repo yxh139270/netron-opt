@@ -205,9 +205,23 @@ const clean = async () => {
 };
 
 const install = async () => {
+    const inNpmInstallLifecycle = process.env.npm_lifecycle_event === 'install';
+    const matchesVersion = (actual, expected) => {
+        if (typeof actual !== 'string' || typeof expected !== 'string') {
+            return false;
+        }
+        const value = expected.trim();
+        if (/^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$/.test(value)) {
+            return actual === value;
+        }
+        if (value.startsWith('^') || value.startsWith('~')) {
+            return actual === value.slice(1);
+        }
+        return true;
+    };
     const node_modules = dirname('node_modules');
     let exists = await access(node_modules);
-    if (exists) {
+    if (exists && !inNpmInstallLifecycle) {
         const dependencies = { ...configuration.dependencies, ...configuration.devDependencies };
         const matches = await Promise.all(Object.entries(dependencies).map(async ([name, version]) => {
             const file = path.join('node_modules', name, 'package.json');
@@ -215,7 +229,7 @@ const install = async () => {
             if (exists) {
                 const content = await fs.readFile(file, 'utf8');
                 const obj = JSON.parse(content);
-                return obj.version === version;
+                return matchesVersion(obj.version, version);
             }
             return false;
         }));
@@ -225,8 +239,8 @@ const install = async () => {
         }
     }
     exists = await access(node_modules);
-    if (!exists) {
-        await exec('npm install');
+    if (!exists && !inNpmInstallLifecycle) {
+        await exec('npm install --ignore-scripts');
     }
     try {
         await exec(`${python} --version`, 'utf-8');
