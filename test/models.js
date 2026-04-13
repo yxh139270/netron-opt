@@ -249,9 +249,6 @@ class Worker {
             }
             case 'complete': {
                 if (this._measures) {
-                    if (Array.isArray(message.renderProfiles)) {
-                        message.measures.set('renderProfiles', JSON.stringify(message.renderProfiles));
-                    }
                     await this._measures.add(message.measures);
                 }
                 this._detach();

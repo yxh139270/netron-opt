@@ -81,12 +81,6 @@ export class Target {
         this.view = new view.View(this.host);
         this.view.options.attributes = true;
         this.view.options.initializers = true;
-        if (process.env.NETRON_LAYOUT_ENGINE) {
-            this.view.options.layoutEngine = process.env.NETRON_LAYOUT_ENGINE;
-        }
-        if (process.env.NETRON_RENDER_ENGINE) {
-            this.view.options.renderEngine = process.env.NETRON_RENDER_ENGINE;
-        }
         const time = async (method) => {
             const start = process.hrtime.bigint();
             let err = null;
@@ -568,18 +562,13 @@ export class Target {
     }
 
     async render() {
-        const renderProfiles = [];
         for (const graph of this.model.modules) {
             const signatures = Array.isArray(graph.signatures) && graph.signatures.length > 0 ? graph.signatures : [graph];
             for (const signature of signatures) {
                 // eslint-disable-next-line no-await-in-loop
                 await this.view.render(graph, signature);
-                if (this.view._lastRenderProfile) {
-                    renderProfiles.push(this.view._lastRenderProfile);
-                }
             }
         }
-        this.renderProfiles = renderProfiles;
     }
 }
 
@@ -600,7 +589,6 @@ if (!worker_threads.isMainThread) {
             }
             await target.execute();
             response.measures = target.measures;
-            response.renderProfiles = target.renderProfiles;
         } catch (error) {
             response.type = 'error';
             response.error = {

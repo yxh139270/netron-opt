@@ -5,7 +5,6 @@ const require = async () => {
         return worker_threads.parentPort;
     }
     import('./dagre.js');
-    import('./layout-engine.js');
     return self;
 };
 
@@ -13,10 +12,10 @@ require().then((self) => {
     self.addEventListener('message', async (e) => {
         const message = e.data;
         switch (message.type) {
-            case 'layout': {
+            case 'dagre.layout': {
                 try {
-                    const layoutEngine = await import('./layout-engine.js');
-                    await layoutEngine.layout(message.nodes, message.edges, message.layout, message.state);
+                    const dagre = await import('./dagre.js');
+                    dagre.layout(message.nodes, message.edges, message.layout, message.state);
                     self.postMessage(message);
                 } catch (error) {
                     self.postMessage({ type: 'error', message: error.message });
@@ -29,3 +28,4 @@ require().then((self) => {
         }
     });
 });
+

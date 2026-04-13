@@ -1,12 +1,5 @@
 const mycelium = {};
 
-const now = () => {
-    if (typeof performance !== 'undefined' && performance.now) {
-        return performance.now();
-    }
-    return Date.now();
-};
-
 mycelium.Graph = class {
 
     constructor(compound) {
@@ -121,7 +114,6 @@ mycelium.Graph = class {
 
     build(document, origin) {
         origin = origin || document.getElementById('origin');
-        const useZRender = this.options && this.options.renderEngine === 'zrender';
         const createGroup = (name) => {
             const element = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             element.setAttribute('id', name);
@@ -151,34 +143,32 @@ mycelium.Graph = class {
             element.appendChild(markerPath);
             return element;
         };
-        if (!useZRender) {
-            edgePathHitTestGroup.addEventListener('pointerover', (e) => {
-                if (this._focused) {
-                    this._focused.blur();
-                    this._focused = null;
-                }
-                const edge = this._focusable.get(e.target);
-                if (edge && edge.focus) {
-                    edge.focus();
-                    this._focused = edge;
-                    e.stopPropagation();
-                }
-            });
-            edgePathHitTestGroup.addEventListener('pointerleave', (e) => {
-                if (this._focused) {
-                    this._focused.blur();
-                    this._focused = null;
-                    e.stopPropagation();
-                }
-            });
-            edgePathHitTestGroup.addEventListener('click', (e) => {
-                const edge = this._focusable.get(e.target);
-                if (edge && edge.activate) {
-                    edge.activate();
-                    e.stopPropagation();
-                }
-            });
-        }
+        edgePathHitTestGroup.addEventListener('pointerover', (e) => {
+            if (this._focused) {
+                this._focused.blur();
+                this._focused = null;
+            }
+            const edge = this._focusable.get(e.target);
+            if (edge && edge.focus) {
+                edge.focus();
+                this._focused = edge;
+                e.stopPropagation();
+            }
+        });
+        edgePathHitTestGroup.addEventListener('pointerleave', (e) => {
+            if (this._focused) {
+                this._focused.blur();
+                this._focused = null;
+                e.stopPropagation();
+            }
+        });
+        edgePathHitTestGroup.addEventListener('click', (e) => {
+            const edge = this._focusable.get(e.target);
+            if (edge && edge.activate) {
+                edge.activate();
+                e.stopPropagation();
+            }
+        });
         edgePathGroupDefs.appendChild(marker('arrowhead'));
         edgePathGroupDefs.appendChild(marker('arrowhead-select'));
         edgePathGroupDefs.appendChild(marker('arrowhead-hover'));
@@ -204,11 +194,9 @@ mycelium.Graph = class {
         this._focusable.clear();
         this._focused = null;
         for (const edge of this.edges.values()) {
-            if (!useZRender) {
-                edge.label.build(document, edgePathGroup, edgePathHitTestGroup, edgeLabelGroup);
-                if (edge.label.hitTest) {
-                    this._focusable.set(edge.label.hitTest, edge.label);
-                }
+            edge.label.build(document, edgePathGroup, edgePathHitTestGroup, edgeLabelGroup);
+            if (edge.label.hitTest) {
+                this._focusable.set(edge.label.hitTest, edge.label);
             }
         }
         const tunnelGroup = createGroup('tunnel-edges');
@@ -231,8 +219,6 @@ mycelium.Graph = class {
     }
 
     async layout(worker) {
-        const profile = {};
-        const t0 = now();
         let nodes = [];
         for (const node of this.nodes.values()) {
             nodes.push({
@@ -258,7 +244,6 @@ mycelium.Graph = class {
         const layout = {};
         layout.nodesep = 20;
         layout.ranksep = 20;
-        layout.engine = this.options.layoutEngine || 'dagre';
         const direction = this.options.direction;
         const rotate = edges.length === 0 ? direction === 'vertical' : direction !== 'vertical';
         if (rotate) {
@@ -270,29 +255,23 @@ mycelium.Graph = class {
         if (nodes.length > 3000) {
             layout.ranker = 'longest-path';
         }
-        profile.prepare = now() - t0;
         const state = {};
         if (worker) {
-            const tw = now();
-            const message = await worker.request({ type: 'layout', nodes, edges, layout, state }, 2500, 'This large graph layout might take a very long time to complete.');
+            const message = await worker.request({ type: 'dagre.layout', nodes, edges, layout, state }, 2500, 'This large graph layout might take a very long time to complete.');
             if (message.type === 'cancel' || message.type === 'terminate') {
                 return message.type;
             }
             nodes = message.nodes;
             edges = message.edges;
             state.log = message.state.log;
-            profile.workerRequest = now() - tw;
         } else {
-            const tl = now();
-            const layoutEngine = await import('./layout-engine.js');
-            await layoutEngine.layout(nodes, edges, layout, state);
-            profile.localLayout = now() - tl;
+            const dagre = await import('./dagre.js');
+            dagre.layout(nodes, edges, layout, state);
         }
         if (state.log) {
             const fs = await import('fs');
             fs.writeFileSync(`dist/test/${this.identifier}.log`, state.log);
         }
-        const t1 = now();
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;
@@ -342,8 +321,6 @@ mycelium.Graph = class {
             this.originX = minX;
             this.originY = minY;
         }
-        profile.mapAndBounds = now() - t1;
-        const t2 = now();
         for (const key of this.nodes.keys()) {
             const entry = this.node(key);
             if (this.children(key).length === 0) {
@@ -351,15 +328,6 @@ mycelium.Graph = class {
                 await node.layout();
             }
         }
-        profile.nodeLayout = now() - t2;
-        this.profile = {
-            ...(this.profile || {}),
-            layout: {
-                ...profile,
-                engine: layout.engine,
-                engineProfile: state.profile || null
-            }
-        };
         return '';
     }
 
@@ -700,13 +668,9 @@ mycelium.Edge = class {
             return { x: x + w, y: y + (dx === 0 ? 0 : w * dy / dx) };
         };
         const curvePath = (edge, tail, head) => {
-            const edgePoints = Array.isArray(edge.points) && edge.points.length > 0 ? edge.points : [
-                { x: tail.x, y: tail.y },
-                { x: head.x, y: head.y }
-            ];
-            const points = edgePoints.slice(1, edgePoints.length - 1);
-            points.unshift(intersectRect(tail, edgePoints[0]));
-            points.push(intersectRect(head, edgePoints[edgePoints.length - 1]));
+            const points = edge.points.slice(1, edge.points.length - 1);
+            points.unshift(intersectRect(tail, points[0]));
+            points.push(intersectRect(head, points[points.length - 1]));
             return new mycelium.Edge.Curve(points).path.data;
         };
         const edgePath = curvePath(this, this.from, this.to);

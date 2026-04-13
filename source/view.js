@@ -8,13 +8,6 @@ const png = {};
 const metadata = {};
 const metrics = {};
 
-const now = () => {
-    if (typeof performance !== 'undefined' && performance.now) {
-        return performance.now();
-    }
-    return Date.now();
-};
-
 view.View = class {
 
     constructor(host) {
@@ -24,9 +17,7 @@ view.View = class {
             attributes: false,
             names: false,
             direction: 'vertical',
-            mousewheel: 'scroll',
-            layoutEngine: 'dagre',
-            renderEngine: 'svg'
+            mousewheel: 'scroll'
         };
         this._options = { ...this._defaultOptions };
         this._events = {};
@@ -184,26 +175,6 @@ view.View = class {
                     label: () => this.options.mousewheel === 'scroll' ? '&Mouse Wheel: Zoom' : '&Mouse Wheel: Scroll',
                     accelerator: 'CmdOrCtrl+M',
                     execute: () => this.toggle('mousewheel'),
-                    enabled: () => this.activeTarget
-                });
-                view.add({
-                    label: () => this.options.layoutEngine === 'dagre' ? 'Layout Engine: &d3-dag' : 'Layout Engine: &Dagre',
-                    execute: () => this.toggle('layoutEngine'),
-                    enabled: () => this.activeTarget
-                });
-                view.add({
-                    label: () => this.options.renderEngine === 'svg' ? 'Render Engine: &ZRender' : 'Render Engine: &SVG',
-                    execute: () => this.toggle('renderEngine'),
-                    enabled: () => this.activeTarget
-                });
-                view.add({
-                    label: () => this.options.layoutEngine === 'd3dag-fast-sugi' ? 'Layout Mode: Fast Sugiyama (On)' : 'Layout Mode: Fast Sugiyama (Off)',
-                    execute: () => this.toggle('layoutEngineFast'),
-                    enabled: () => this.activeTarget
-                });
-                view.add({
-                    label: () => this.options.layoutEngine === 'd3dag-zherebko' ? 'Layout Mode: Zherebko (On)' : 'Layout Mode: Zherebko (Off)',
-                    execute: () => this.toggle('layoutEngineZherebko'),
                     enabled: () => this.activeTarget
                 });
                 view.add({});
@@ -388,22 +359,6 @@ view.View = class {
                 break;
             case 'mousewheel':
                 this._options.mousewheel = this._options.mousewheel === 'scroll' ? 'zoom' : 'scroll';
-                break;
-            case 'layoutEngine':
-                this._options.layoutEngine = this._options.layoutEngine === 'dagre' ? 'd3dag' : 'dagre';
-                this._reload();
-                break;
-            case 'layoutEngineFast':
-                this._options.layoutEngine = this._options.layoutEngine === 'd3dag-fast-sugi' ? 'dagre' : 'd3dag-fast-sugi';
-                this._reload();
-                break;
-            case 'layoutEngineZherebko':
-                this._options.layoutEngine = this._options.layoutEngine === 'd3dag-zherebko' ? 'dagre' : 'd3dag-zherebko';
-                this._reload();
-                break;
-            case 'renderEngine':
-                this._options.renderEngine = this._options.renderEngine === 'svg' ? 'zrender' : 'svg';
-                this._reload();
                 break;
             default:
                 throw new view.Error(`Unsupported toggle '${name}'.`);
@@ -958,8 +913,6 @@ view.View = class {
     }
 
     async render(target, signature) {
-        const profile = {};
-        const t0 = now();
         this.target = null;
         const element = this._element('target');
         while (element.lastChild) {
@@ -982,28 +935,14 @@ view.View = class {
             }
             viewGraph.add(graph, signature);
             viewGraph.addTunnels();
-            profile.setup = now() - t0;
-            const t1 = now();
             viewGraph.build(document);
-            profile.build = now() - t1;
-            const t2 = now();
             await viewGraph.measure();
-            profile.measure = now() - t2;
-            const t3 = now();
             status = await viewGraph.layout(this._worker);
-            profile.layout = now() - t3;
             if (status === '') {
-                const t4 = now();
                 viewGraph.update();
                 viewGraph.updateTunnels();
                 viewGraph.restore(state);
-                profile.update = now() - t4;
                 this.target = viewGraph;
-                this._lastRenderProfile = {
-                    ...profile,
-                    layoutDetail: viewGraph.profile ? viewGraph.profile.layout : null,
-                    total: now() - t0
-                };
             }
         }
         return status;
@@ -2370,107 +2309,6 @@ view.Graph = class extends grapher.Graph {
         }
     }
 
-    async _renderWithZRender() {
-        if (this.options.renderEngine !== 'zrender') {
-            if (this._zr) {
-                this._zr.dispose();
-                this._zr = null;
-            }
-            return;
-        }
-        const canvas = this.host.document.getElementById('canvas');
-        const origin = this.host.document.getElementById('origin');
-        if (!canvas) {
-            return;
-        }
-        if (!this._zrHost) {
-            const parent = canvas.parentElement;
-            const host = this.host.document.createElement('div');
-            host.setAttribute('id', 'zrender-overlay');
-            host.style.position = 'absolute';
-            host.style.top = '0';
-            host.style.left = '0';
-            host.style.right = '0';
-            host.style.bottom = '0';
-            host.style.pointerEvents = 'none';
-            parent.style.position = 'relative';
-            parent.insertBefore(host, canvas.nextSibling);
-            this._zrHost = host;
-        }
-        const zrender = await import('zrender');
-        if (!this._zr) {
-            const width = this._zrHost.clientWidth || canvas.clientWidth || 800;
-            const height = this._zrHost.clientHeight || canvas.clientHeight || 600;
-            this._zr = zrender.init(this._zrHost, { renderer: 'canvas', width, height, devicePixelRatio: this.host.window.devicePixelRatio || 1 });
-        } else {
-            this._zr.resize({
-                width: this._zrHost.clientWidth || canvas.clientWidth || 800,
-                height: this._zrHost.clientHeight || canvas.clientHeight || 600
-            });
-        }
-        this._zr.clear();
-        if (origin) {
-            const transform = origin.getAttribute('transform') || '';
-            const match = /translate\(([-0-9.]+),\s*([-0-9.]+)\)/.exec(transform);
-            const tx = match ? Number(match[1]) : 0;
-            const ty = match ? Number(match[2]) : 0;
-            this._zrRoot = this._zrRoot || new zrender.Group();
-            this._zrRoot.attr('position', [tx, ty]);
-            this._zr.add(this._zrRoot);
-            this._zrRoot.removeAll();
-        }
-        const { Polyline, Rect } = zrender;
-        for (const node of this.nodes.values()) {
-            const label = node.label;
-            if (!(label instanceof view.Node)) {
-                continue;
-            }
-            const x = label.x - (label.width / 2);
-            const y = label.y - (label.height / 2);
-            const rect = new Rect({
-                shape: {
-                    x,
-                    y,
-                    width: label.width,
-                    height: label.height,
-                    r: 5
-                },
-                style: {
-                    stroke: '#777',
-                    lineWidth: 1,
-                    fill: 'rgba(255,255,255,0.35)'
-                },
-                silent: true
-            });
-            if (this._zrRoot) {
-                this._zrRoot.add(rect);
-            } else {
-                this._zr.add(rect);
-            }
-        }
-        for (const edge of this.edges.values()) {
-            const label = edge.label;
-            if (!label || !Array.isArray(label.points) || label.points.length < 2) {
-                continue;
-            }
-            const points = label.points.map((point) => [point.x, point.y]);
-            const polyline = new Polyline({
-                shape: { points },
-                style: {
-                    stroke: '#888',
-                    lineWidth: 1,
-                    opacity: 0.5
-                },
-                silent: true
-            });
-            if (this._zrRoot) {
-                this._zrRoot.add(polyline);
-            } else {
-                this._zr.add(polyline);
-            }
-        }
-    }
-
     build(document, origin) {
         if (!origin) {
             const element = document.getElementById('target');
@@ -2519,13 +2357,6 @@ view.Graph = class extends grapher.Graph {
             });
         });
         await super.measure();
-    }
-
-    update() {
-        super.update();
-        this._renderWithZRender().catch(() => {
-            // ignore zrender overlay errors and keep SVG render path
-        });
     }
 
     clearSelection() {
@@ -2978,10 +2809,6 @@ view.Node = class extends grapher.Node {
         }
     }
 
-    get _useZRender() {
-        return this.context && this.context.options && this.context.options.renderEngine === 'zrender';
-    }
-
     get class() {
         return 'graph-node';
     }
@@ -3194,7 +3021,6 @@ view.Node = class extends grapher.Node {
         }
         return this._edges.get(to);
     }
-
 };
 
 view.Block = class {
@@ -3310,13 +3136,6 @@ view.Input = class extends grapher.Node {
             this._edges.set(to, new view.Edge(this, to));
         }
         return this._edges.get(to);
-    }
-
-    build(document, parent) {
-        super.build(document, parent);
-        if (this._useZRender && this.border) {
-            this.border.style.opacity = 0;
-        }
     }
 };
 
@@ -3478,27 +3297,6 @@ view.Edge = class extends grapher.Edge {
         super(from, to);
         this.v = from.name;
         this.w = to.name;
-    }
-
-    get _useZRender() {
-        return this.from && this.from.context && this.from.context.options && this.from.context.options.renderEngine === 'zrender';
-    }
-
-    build(document, edgePathGroupElement, edgePathHitTestGroupElement, edgeLabelGroupElement) {
-        if (this._useZRender) {
-            this.element = null;
-            this.hitTest = null;
-            this.labelElement = null;
-            return;
-        }
-        super.build(document, edgePathGroupElement, edgePathHitTestGroupElement, edgeLabelGroupElement);
-    }
-
-    update() {
-        if (this._useZRender) {
-            return;
-        }
-        super.update();
     }
 
     get minlen() {
