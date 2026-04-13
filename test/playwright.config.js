@@ -21,5 +21,12 @@ export default playwright.defineConfig({
                 baseURL: 'http://localhost:8080'
             },
         },
+        {
+            name: 'viewport-benchmark',
+            testMatch: '**/viewport-benchmark.js',
+            use: {
+                baseURL: 'http://localhost:8080'
+            },
+        },
     ],
 });
