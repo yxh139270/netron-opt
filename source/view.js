@@ -12,6 +12,9 @@ view.View = class {
 
     constructor(host) {
         this._host = host;
+        if (typeof console !== 'undefined' && console.info) {
+            console.info('[netron-opt] build marker: view-2026-04-15-debug-worker-off');
+        }
         this._defaultOptions = {
             weights: true,
             attributes: false,
@@ -19,7 +22,8 @@ view.View = class {
             direction: 'vertical',
             mousewheel: 'scroll',
             layoutEstimateMode: 'auto',
-            layoutEstimateThreshold: 1500
+            layoutEstimateThreshold: 1500,
+            layoutDebug: true
         };
         this._options = { ...this._defaultOptions };
         this._events = {};
@@ -31,7 +35,8 @@ view.View = class {
         this._find = null;
         this._modelFactoryService = new view.ModelFactoryService(this._host);
         this._modelFactoryService.import();
-        this._worker = this._host.environment('serial') ? null : new view.Worker(this._host);
+        // Debug mode: force layout on main thread so logs are visible.
+        this._worker = null;
     }
 
     async start() {
@@ -481,20 +486,58 @@ view.View = class {
             }
             viewGraph.add(graph, this.activeSignature);
             viewGraph.addTunnels();
-            viewGraph.build(document, origin);
             const layoutOptions = this._layoutOptions(graph);
+            viewGraph.build(document, origin, { lazyLeafNodes: layoutOptions.estimateOnly });
             let status = '';
             if (layoutOptions.estimateOnly) {
                 status = await viewGraph.layout(this._worker, layoutOptions);
-                if (status === '') {
-                    await viewGraph.measure();
-                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
-                }
             } else {
                 await viewGraph.measure();
                 status = await viewGraph.layout(this._worker, { estimateOnly: false });
             }
             if (status === '') {
+                if (this.options.layoutDebug && document && document.defaultView && document.defaultView.console) {
+                    const debugMultiInput = [];
+                    const inDegree = new Map();
+                    for (const edge of viewGraph.edges.values()) {
+                        inDegree.set(edge.w, (inDegree.get(edge.w) || 0) + 1);
+                    }
+                    for (const [nodeId, degree] of inDegree) {
+                        if (degree > 1) {
+                            debugMultiInput.push(nodeId);
+                        }
+                    }
+                    const focused = debugMultiInput.filter((id) => String(id).includes('Times212'));
+                    const targets = focused.length > 0 ? focused : debugMultiInput.slice(0, 10);
+                    if (targets.length > 0) {
+                        document.defaultView.console.warn('[layout-debug] refresh multi-input targets', targets);
+                        for (const targetId of targets) {
+                            const entry = viewGraph.node(targetId);
+                            const node = entry && entry.label ? entry.label : null;
+                            if (node) {
+                                document.defaultView.console.warn(`[layout-debug] refresh node ${targetId} @ (${node.x}, ${node.y})`);
+                            }
+                            for (const edge of viewGraph.edges.values()) {
+                                if (edge.w === targetId && edge.label) {
+                                    const pts = Array.isArray(edge.label.points) ? edge.label.points : [];
+                                    const p1 = pts.length > 1 ? pts[1] : null;
+                                    const p2 = pts.length > 2 ? pts[2] : null;
+                                    const end = pts.length > 0 ? pts[pts.length - 1] : null;
+                                    document.defaultView.console.warn('[layout-debug] refresh edge', {
+                                        edge: `${edge.v}->${edge.w}`,
+                                        p1,
+                                        p2,
+                                        end,
+                                        labelX: edge.label.x,
+                                        labelY: edge.label.y
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        document.defaultView.console.warn('[layout-debug] refresh no multi-input nodes found');
+                    }
+                }
                 for (const child of oldChildren) {
                     if (child.parentNode === origin) {
                         origin.removeChild(child);
@@ -505,6 +548,32 @@ view.View = class {
                 document.getElementById('background').setAttribute('height', 0);
                 viewGraph.restore(state);
                 viewGraph._updateViewport();
+                if (typeof viewGraph.refineViewport === 'function') {
+                    const stats = await viewGraph.refineViewport(200);
+                    this.host.event('lazy_refine', stats || {});
+                    const view = document && document.defaultView;
+                    if (view && view.console && view.console.info) {
+                        view.console.info('[lazy-refine] render refine stats', stats || {});
+                    }
+                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                    if (status === '') {
+                        viewGraph.restore(state);
+                    }
+                    viewGraph._updateViewport();
+                    if (view && typeof view.requestAnimationFrame === 'function') {
+                        await new Promise((resolve) => view.requestAnimationFrame(() => view.requestAnimationFrame(resolve)));
+                    }
+                    const stats2 = await viewGraph.refineViewport(400);
+                    this.host.event('lazy_refine', stats2 || {});
+                    if (view && view.console && view.console.info) {
+                        view.console.info('[lazy-refine] render refine stats (pass2)', stats2 || {});
+                    }
+                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                    if (status === '') {
+                        viewGraph.restore(state);
+                        viewGraph._updateViewport();
+                    }
+                }
                 this.target = viewGraph;
             } else {
                 for (const child of Array.from(origin.children)) {
@@ -603,7 +672,8 @@ view.View = class {
                             const edgeOx = (dfx + dtx) / 2 + ox;
                             const edgeOy = (dfy + dty) / 2 + oy;
                             if (Math.abs(edgeOx) > 0.5 || Math.abs(edgeOy) > 0.5) {
-                                const labelTransform = label.labelElement ? label.labelElement.getAttribute('transform') : null;
+                                const rawLabelTransform = label.labelElement ? label.labelElement.getAttribute('transform') : null;
+                                const labelTransform = rawLabelTransform && rawLabelTransform.includes('NaN') ? '' : rawLabelTransform;
                                 animations.push({
                                     type: 'edge', element: label.element,
                                     hitTest: label.hitTest, labelElement: label.labelElement,
@@ -643,7 +713,10 @@ view.View = class {
                             anim.hitTest.setAttribute('transform', t);
                         }
                         if (anim.labelElement) {
-                            anim.labelElement.setAttribute('transform', `translate(${anim.fromX},${anim.fromY}) ${anim.labelTransform || ''}`);
+                            const lx = Number.isFinite(anim.fromX) ? anim.fromX : 0;
+                            const ly = Number.isFinite(anim.fromY) ? anim.fromY : 0;
+                            const suffix = anim.labelTransform && !anim.labelTransform.includes('NaN') ? anim.labelTransform : '';
+                            anim.labelElement.setAttribute('transform', `translate(${lx},${ly}) ${suffix}`);
                         }
                     } else if (anim.type === 'fadein') {
                         anim.element.style.opacity = '0';
@@ -682,7 +755,10 @@ view.View = class {
                                 anim.hitTest.setAttribute('transform', tr);
                             }
                             if (anim.labelElement) {
-                                anim.labelElement.setAttribute('transform', `translate(${x},${y}) ${anim.labelTransform || ''}`);
+                                const lx = Number.isFinite(x) ? x : 0;
+                                const ly = Number.isFinite(y) ? y : 0;
+                                const suffix = anim.labelTransform && !anim.labelTransform.includes('NaN') ? anim.labelTransform : '';
+                                anim.labelElement.setAttribute('transform', `translate(${lx},${ly}) ${suffix}`);
                             }
                         } else if (anim.type === 'fadein') {
                             anim.element.style.opacity = String(ease);
@@ -700,7 +776,7 @@ view.View = class {
                                     anim.hitTest.removeAttribute('transform');
                                 }
                                 if (anim.labelElement) {
-                                    if (anim.labelTransform) {
+                                    if (anim.labelTransform && !anim.labelTransform.includes('NaN')) {
                                         anim.labelElement.setAttribute('transform', anim.labelTransform);
                                     } else {
                                         anim.labelElement.removeAttribute('transform');
@@ -967,21 +1043,86 @@ view.View = class {
             }
             viewGraph.add(graph, signature);
             viewGraph.addTunnels();
-            viewGraph.build(document);
             const layoutOptions = this._layoutOptions(graph);
+            viewGraph.build(document, null, { lazyLeafNodes: layoutOptions.estimateOnly });
             if (layoutOptions.estimateOnly) {
                 status = await viewGraph.layout(this._worker, layoutOptions);
-                if (status === '') {
-                    await viewGraph.measure();
-                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
-                }
+                // Keep estimate-only path lazy to avoid full DOM creation on large graphs.
             } else {
                 await viewGraph.measure();
                 status = await viewGraph.layout(this._worker, { estimateOnly: false });
             }
             if (status === '') {
+                if (this.options.layoutDebug && document && document.defaultView && document.defaultView.console) {
+                    const debugMultiInput = [];
+                    const inDegree = new Map();
+                    for (const edge of viewGraph.edges.values()) {
+                        inDegree.set(edge.w, (inDegree.get(edge.w) || 0) + 1);
+                    }
+                    for (const [nodeId, degree] of inDegree) {
+                        if (degree > 1) {
+                            debugMultiInput.push(nodeId);
+                        }
+                    }
+                    const focused = debugMultiInput.filter((id) => String(id).includes('Times212'));
+                    const targets = focused.length > 0 ? focused : debugMultiInput.slice(0, 10);
+                    if (targets.length > 0) {
+                        document.defaultView.console.warn('[layout-debug] multi-input targets', targets);
+                        for (const targetId of targets) {
+                            const entry = viewGraph.node(targetId);
+                            const node = entry && entry.label ? entry.label : null;
+                            if (node) {
+                                document.defaultView.console.warn(`[layout-debug] node ${targetId} @ (${node.x}, ${node.y})`);
+                            }
+                            for (const edge of viewGraph.edges.values()) {
+                                if (edge.w === targetId && edge.label) {
+                                    const pts = Array.isArray(edge.label.points) ? edge.label.points : [];
+                                    const p1 = pts.length > 1 ? pts[1] : null;
+                                    const p2 = pts.length > 2 ? pts[2] : null;
+                                    const end = pts.length > 0 ? pts[pts.length - 1] : null;
+                                    document.defaultView.console.warn('[layout-debug] edge', {
+                                        edge: `${edge.v}->${edge.w}`,
+                                        p1,
+                                        p2,
+                                        end,
+                                        labelX: edge.label.x,
+                                        labelY: edge.label.y
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        document.defaultView.console.warn('[layout-debug] no multi-input nodes found');
+                    }
+                }
                 viewGraph.restore(state);
                 viewGraph._updateViewport();
+                if (typeof viewGraph.refineViewport === 'function') {
+                    const stats = await viewGraph.refineViewport(200);
+                    this.host.event('lazy_refine', stats || {});
+                    const view = document && document.defaultView;
+                    if (view && view.console && view.console.info) {
+                        view.console.info('[lazy-refine] refresh refine stats', stats || {});
+                    }
+                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                    if (status === '') {
+                        viewGraph.restore(state);
+                    }
+                    viewGraph._updateViewport();
+                    if (view && typeof view.requestAnimationFrame === 'function') {
+                        await new Promise((resolve) => view.requestAnimationFrame(() => view.requestAnimationFrame(resolve)));
+                    }
+                    const stats2 = await viewGraph.refineViewport(400);
+                    this.host.event('lazy_refine', stats2 || {});
+                    if (view && view.console && view.console.info) {
+                        view.console.info('[lazy-refine] refresh refine stats (pass2)', stats2 || {});
+                    }
+                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                    if (status === '') {
+                        viewGraph.restore(state);
+                        viewGraph._updateViewport();
+                    }
+                }
                 this.target = viewGraph;
             }
         }

@@ -10,6 +10,7 @@ browser.Host = class {
         this._navigator = window.navigator;
         this._document = window.document;
         this._telemetry = new base.Telemetry(this._window);
+        this._telemetryEnabled = false;
         this._window.eval = () => {
             throw new Error('window.eval() not supported.');
         };
@@ -91,7 +92,9 @@ browser.Host = class {
             this._setCookie('consent', Date.now().toString(), 30);
         };
         const telemetry = async () => {
-            if (this._environment.packaged) {
+            // Local/dev build: disable telemetry completely to keep console clean.
+            return;
+            if (this._environment.packaged && this._telemetryEnabled) {
                 window.addEventListener('error', (event) => {
                     if (event instanceof window.ErrorEvent && event.error && event.error instanceof Error) {
                         this.exception(event.error, true);
@@ -102,7 +105,8 @@ browser.Host = class {
                     }
                 });
                 const measurement_id = '848W2NVWVH';
-                const user = this._getCookie('_ga').replace(/^(GA1\.\d\.)*/, '');
+                const gaCookie = this._getCookie('_ga') || '';
+                const user = gaCookie.replace(/^(GA1\.\d\.)*/, '');
                 const session = this._getCookie(`_ga${measurement_id}`);
                 await this._telemetry.start(`G-${measurement_id}`, user, session);
                 this._telemetry.set('page_location', document.location && document.location.href ? document.location.href : null);
@@ -298,7 +302,7 @@ browser.Host = class {
     }
 
     exception(error, fatal) {
-        if (this._telemetry && error) {
+        if (this._telemetryEnabled && this._telemetry && error) {
             const name = error.name ? `${error.name}: ` : '';
             const message = error.message ? error.message : JSON.stringify(error);
             let context = '';
@@ -348,7 +352,7 @@ browser.Host = class {
     }
 
     event(name, params) {
-        if (name && params) {
+        if (this._telemetryEnabled && name && params) {
             params.app_name = this.type;
             params.app_version = this.version;
             this._telemetry.send(name, params);

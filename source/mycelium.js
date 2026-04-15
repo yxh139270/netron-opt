@@ -11,6 +11,7 @@ mycelium.Graph = class {
         this._children = new Map();
         this._children.set('\x00', new Map());
         this._parent = new Map();
+        this._updateScheduled = false;
     }
 
     setNode(node) {
@@ -168,8 +169,171 @@ mycelium.Graph = class {
         element.parentNode.removeChild(element);
     }
 
-    build(document, origin) {
+    _ensureEdgeBuilt(edge) {
+        const label = edge.label;
+        if (!label || label.element) {
+            return;
+        }
+        label.build(this._document, this._edgePathGroup, this._edgePathHitTestGroup, this._edgeLabelGroup);
+        if (label.labelElement && typeof label.labelElement.getBBox === 'function') {
+            const box = label.labelElement.getBBox();
+            if (Number.isFinite(box.width) && Number.isFinite(box.height)) {
+                label.width = box.width;
+                label.height = box.height;
+            }
+        }
+        if (label.hitTest) {
+            this._focusable.set(label.hitTest, label);
+        }
+    }
+
+    _ensureClusterBuilt(node) {
+        if (!node || node.element) {
+            return;
+        }
+        const document = this._document;
+        const rectangle = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        if (node.rx) {
+            rectangle.setAttribute('rx', node.rx);
+        }
+        if (node.ry) {
+            rectangle.setAttribute('ry', node.ry);
+        }
+        const element = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        element.setAttribute('class', 'cluster');
+        element.appendChild(rectangle);
+        node.rectangle = rectangle;
+        node.element = element;
+        this._clusterGroup.appendChild(element);
+    }
+
+    _ensureNodeBuilt(node) {
+        if (!node || node.element) {
+            return;
+        }
+        node.build(this._document, this._nodeGroup);
+        if (this._lazyLeafNodes) {
+            this._refineVisibleNode(node);
+        }
+    }
+
+    _scheduleUpdate() {
+        if (this._updateScheduled) {
+            return;
+        }
+        this._updateScheduled = true;
+        const run = () => {
+            this._updateScheduled = false;
+            this.update();
+            if (typeof this.updateTunnels === 'function') {
+                this.updateTunnels();
+            }
+        };
+        const view = this._document && this._document.defaultView;
+        if (view && typeof view.requestAnimationFrame === 'function') {
+            view.requestAnimationFrame(run);
+        } else {
+            setTimeout(run, 0);
+        }
+    }
+
+    _refineVisibleNode(node) {
+        if (!node || node._refined || node._refining || typeof node.measure !== 'function' || typeof node.layout !== 'function') {
+            return;
+        }
+        node._refining = true;
+        Promise.resolve().then(async () => {
+            try {
+                node._lazyMeasure = false;
+                const document = this._document;
+                if (document && document.fonts && document.fonts.ready) {
+                    await document.fonts.ready;
+                }
+                const view = document && document.defaultView;
+                if (view && typeof view.requestAnimationFrame === 'function') {
+                    await new Promise((resolve) => view.requestAnimationFrame(resolve));
+                }
+                await node.measure();
+                await node.layout();
+                node._refined = Number.isFinite(node.width) && node.width > 0 && Number.isFinite(node.height) && node.height > 0;
+            } catch {
+                node._refined = false;
+                const view = this._document && this._document.defaultView;
+                if (view && view.console && view.console.warn) {
+                    view.console.warn('[lazy-refine] visible node refine failed', {
+                        id: node.id,
+                        name: node.name,
+                        width: node.width,
+                        height: node.height
+                    });
+                }
+            } finally {
+                node._refining = false;
+                this._scheduleUpdate();
+            }
+        });
+    }
+
+    async refineViewport(limit) {
+        const viewport = this._viewport;
+        if (!viewport) {
+            return { enabled: true, attempts: 0, refined: 0, failures: 0, reason: 'no-viewport' };
+        }
+        limit = Number.isFinite(limit) ? limit : 120;
+        const document = this._document;
+        if (document && document.fonts && document.fonts.ready) {
+            await document.fonts.ready;
+        }
+        let count = 0;
+        let refined = 0;
+        let failures = 0;
+        for (const nodeId of this.nodes.keys()) {
+            if (count >= limit) {
+                break;
+            }
+            if (this.children(nodeId).length !== 0) {
+                continue;
+            }
+            const node = this.node(nodeId).label;
+            if (node._refined) {
+                continue;
+            }
+            const bounds = this._nodeBounds(node);
+            if (!this._rectIntersects(bounds, viewport)) {
+                continue;
+            }
+            this._ensureNodeBuilt(node);
+            this._mount(node.element);
+            try {
+                node._lazyMeasure = false;
+                await node.measure();
+                await node.layout();
+                node._refined = Number.isFinite(node.width) && node.width > 0 && Number.isFinite(node.height) && node.height > 0;
+                if (node._refined) {
+                    refined++;
+                }
+            } catch {
+                node._refined = false;
+                failures++;
+            }
+            count++;
+        }
+        if (failures > 0) {
+            const view = this._document && this._document.defaultView;
+            if (view && view.console && view.console.warn) {
+                view.console.warn('[lazy-refine] viewport refine completed with failures', {
+                    attempts: count,
+                    failures
+                });
+            }
+        }
+        return { enabled: true, attempts: count, refined, failures };
+    }
+
+    build(document, origin, options) {
         origin = origin || document.getElementById('origin');
+        options = options || {};
+        this._lazyLeafNodes = !!options.lazyLeafNodes;
         const createGroup = (name) => {
             const element = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             element.setAttribute('id', name);
@@ -181,6 +345,11 @@ mycelium.Graph = class {
         const edgePathHitTestGroup = createGroup('edge-paths-hit-test');
         const edgeLabelGroup = createGroup('edge-labels');
         const nodeGroup = createGroup('nodes');
+        this._clusterGroup = clusterGroup;
+        this._nodeGroup = nodeGroup;
+        this._edgePathGroup = edgePathGroup;
+        this._edgePathHitTestGroup = edgePathHitTestGroup;
+        this._edgeLabelGroup = edgeLabelGroup;
         const edgePathGroupDefs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
         edgePathGroup.appendChild(edgePathGroupDefs);
         const marker = (id) => {
@@ -232,27 +401,19 @@ mycelium.Graph = class {
             const entry = this.node(nodeId);
             const node = entry.label;
             if (this.children(nodeId).length === 0) {
-                node.build(document, nodeGroup);
-            } else {
-                node.rectangle = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-                if (node.rx) {
-                    node.rectangle.setAttribute('rx', entry.rx);
+                if (!this._lazyLeafNodes) {
+                    node.build(document, nodeGroup);
                 }
-                if (node.ry) {
-                    node.rectangle.setAttribute('ry', entry.ry);
-                }
-                node.element = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-                node.element.setAttribute('class', 'cluster');
-                node.element.appendChild(node.rectangle);
-                clusterGroup.appendChild(node.element);
             }
         }
         this._focusable.clear();
         this._focused = null;
         for (const edge of this.edges.values()) {
-            edge.label.build(document, edgePathGroup, edgePathHitTestGroup, edgeLabelGroup);
-            if (edge.label.hitTest) {
-                this._focusable.set(edge.label.hitTest, edge.label);
+            const label = edge.label;
+            if (label && label.label) {
+                const text = String(label.label);
+                label.width = Math.min(240, Math.max(16, text.length * 7));
+                label.height = 14;
             }
         }
         const tunnelGroup = createGroup('tunnel-edges');
@@ -264,14 +425,6 @@ mycelium.Graph = class {
         origin.appendChild(tunnelGroup);
         this._tunnelGroup = tunnelGroup;
         this._document = document;
-        for (const edge of this.edges.values()) {
-            if (edge.label.labelElement) {
-                const label = edge.label;
-                const box = label.labelElement.getBBox();
-                label.width = box.width;
-                label.height = box.height;
-            }
-        }
     }
 
     _estimateNodeSize(label) {
@@ -289,12 +442,23 @@ mycelium.Graph = class {
 
     async layout(worker, options) {
         const estimateOnly = options && options.estimateOnly;
+        if (typeof console !== 'undefined' && console.warn) {
+            console.warn(`[mycelium-layout] worker=${worker ? 'on' : 'off'} estimateOnly=${estimateOnly ? 'on' : 'off'}`);
+        }
         let nodes = [];
         for (const node of this.nodes.values()) {
+            node.label._lazyMeasure = !!estimateOnly;
+            if (estimateOnly && node.label && typeof node.label.estimate === 'function') {
+                node.label.estimate();
+            }
             const size = estimateOnly ? this._estimateNodeSize(node.label) : null;
             if (size) {
-                node.label.width = size.width;
-                node.label.height = size.height;
+                if (!Number.isFinite(node.label.width) || node.label.width <= 0) {
+                    node.label.width = size.width;
+                }
+                if (!Number.isFinite(node.label.height) || node.label.height <= 0) {
+                    node.label.height = size.height;
+                }
             }
             nodes.push({
                 v: node.v,
@@ -340,12 +504,18 @@ mycelium.Graph = class {
             edges = message.edges;
             state.log = message.state.log;
         } else {
-            const dagre = await import('./dagre.js');
+            const dagre = await import('./dagre-fast.js');
             dagre.layout(nodes, edges, layout, state);
         }
         if (state.log) {
-            const fs = await import('fs');
-            fs.writeFileSync(`dist/test/${this.identifier}.log`, state.log);
+            if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+                const fs = await import('fs');
+                fs.writeFileSync(`dist/test/${this.identifier}.log`, state.log);
+            } else if (typeof window !== 'undefined' && window.console && window.console.info) {
+                window.console.info(state.log);
+            }
+        } else if (typeof window !== 'undefined' && window.console && window.console.warn) {
+            window.console.warn('[mycelium] dagre state.log is empty');
         }
         let minX = Infinity;
         let minY = Infinity;
@@ -418,6 +588,10 @@ mycelium.Graph = class {
                     visible = this._rectIntersects(bounds, viewport);
                 }
                 if (visible) {
+                    this._ensureNodeBuilt(node);
+                    if (this._lazyLeafNodes) {
+                        this._refineVisibleNode(node);
+                    }
                     this._mount(node.element);
                     node.update();
                 } else {
@@ -432,6 +606,7 @@ mycelium.Graph = class {
                     visible = this._rectIntersects(bounds, viewport);
                 }
                 if (visible) {
+                    this._ensureClusterBuilt(node);
                     this._mount(node.element);
                     node.element.setAttribute('transform', `translate(${node.x},${node.y})`);
                     node.rectangle.setAttribute('x', -node.width / 2);
@@ -450,6 +625,7 @@ mycelium.Graph = class {
                 visible = this._edgeVisible(label, viewport);
             }
             if (visible) {
+                this._ensureEdgeBuilt(edge);
                 this._mount(label.element);
                 this._mount(label.hitTest);
                 this._mount(label.labelElement);
@@ -509,6 +685,7 @@ mycelium.Node = class {
     async measure() {
         this.height = 0;
         for (const block of this.blocks) {
+            block._lazyContent = !!this._lazyMeasure;
             await block.measure();
             this.height += block.height;
         }
@@ -529,7 +706,51 @@ mycelium.Node = class {
         }
     }
 
+    estimate() {
+        let width = 0;
+        let height = 0;
+        for (const block of this.blocks) {
+            if (this._lazyMeasure) {
+                block._lazyContent = true;
+            }
+            if (typeof block.estimate === 'function') {
+                block.estimate();
+            }
+            if (!Number.isFinite(block.width) || block.width <= 0) {
+                block.width = 120;
+            }
+            if (!Number.isFinite(block.height) || block.height <= 0) {
+                block.height = 24;
+            }
+            width = Math.max(width, block.width);
+            height += block.height;
+        }
+        this.width = Math.max(120, width);
+        this.height = Math.max(44, height);
+        for (const block of this.blocks) {
+            block.width = this.width;
+        }
+    }
+
     update() {
+        const isFiniteSize = (value) => Number.isFinite(value) && value >= 0;
+        if (!isFiniteSize(this.width) || !isFiniteSize(this.height) || !Number.isFinite(this.x) || !Number.isFinite(this.y)) {
+            if (!this._invalidLayoutLogged) {
+                this._invalidLayoutLogged = true;
+                const view = this.element && this.element.ownerDocument && this.element.ownerDocument.defaultView;
+                if (view && view.console && view.console.warn) {
+                    view.console.warn('[node-layout] invalid node geometry', {
+                        id: this.id,
+                        name: this.name,
+                        x: this.x,
+                        y: this.y,
+                        width: this.width,
+                        height: this.height
+                    });
+                }
+            }
+            return;
+        }
         for (const block of this.blocks) {
             block.update();
         }
@@ -599,6 +820,24 @@ mycelium.Node.Header = class {
             entry.measure();
             this.height = Math.max(this.height, entry.height);
             this.width += entry.width;
+        }
+    }
+
+    estimate() {
+        this.width = 0;
+        this.height = 0;
+        for (const entry of this._entries) {
+            if (typeof entry.estimate === 'function') {
+                entry.estimate();
+            }
+            this.height = Math.max(this.height, entry.height || 0);
+            this.width += entry.width || 0;
+        }
+        if (!Number.isFinite(this.height) || this.height <= 0) {
+            this.height = 22;
+        }
+        if (!Number.isFinite(this.width) || this.width <= 0) {
+            this.width = 120;
         }
     }
 
@@ -692,10 +931,31 @@ mycelium.Node.Header.Entry = class {
         const yPadding = 4;
         const xPadding = this.padding || 7;
         const boundingBox = this.text.getBBox();
+        if ((!Number.isFinite(boundingBox.width) || boundingBox.width <= 0) &&
+            (!Number.isFinite(boundingBox.height) || boundingBox.height <= 0)) {
+            this.estimate();
+            return;
+        }
         this.width = boundingBox.width + xPadding + xPadding;
         this.height = boundingBox.height + yPadding + yPadding;
         this.tx = xPadding;
-        this.ty = yPadding - boundingBox.y;
+        let offsetY = Number.isFinite(boundingBox.y) ? boundingBox.y : 0;
+        if (offsetY >= 0 && Number.isFinite(boundingBox.height) && boundingBox.height > 0) {
+            offsetY = -(boundingBox.height - 2);
+        }
+        this.ty = yPadding - offsetY;
+    }
+
+    estimate() {
+        const yPadding = 4;
+        const xPadding = this.padding || 7;
+        const text = this.content || '\u00A0';
+        const textWidth = String(text).length * 7;
+        const textHeight = 14;
+        this.width = textWidth + xPadding + xPadding;
+        this.height = textHeight + yPadding + yPadding;
+        this.tx = xPadding;
+        this.ty = yPadding + textHeight - 2;
     }
 
     layout() {
@@ -787,7 +1047,11 @@ mycelium.Edge = class {
         this.element.setAttribute('d', edgePath);
         this.hitTest.setAttribute('d', edgePath);
         if (this.labelElement) {
-            this.labelElement.setAttribute('transform', `translate(${this.x - (this.width / 2)},${this.y - (this.height / 2)})`);
+            const width = Number.isFinite(this.width) ? this.width : 0;
+            const height = Number.isFinite(this.height) ? this.height : 0;
+            const x = Number.isFinite(this.x) ? this.x : 0;
+            const y = Number.isFinite(this.y) ? this.y : 0;
+            this.labelElement.setAttribute('transform', `translate(${x - (width / 2)},${y - (height / 2)})`);
             this.labelElement.style.opacity = 1;
         }
     }
@@ -1006,9 +1270,33 @@ mycelium.ArgumentList = class {
         this.height = 3;
         for (let i = 0; i < this._items.length; i++) {
             const item = this._items[i];
+            item._lazyContent = !!this._lazyContent;
             await item.measure();
             this.height += item.height;
             this.width = Math.max(this.width, item.width);
+            if (item.type === 'node' || item.type === 'node[]') {
+                if (i === this._items.length - 1) {
+                    this.height += 3;
+                }
+            }
+        }
+        for (const item of this._items) {
+            item.width = this.width;
+        }
+        this.height += 3;
+    }
+
+    estimate() {
+        this.width = 75;
+        this.height = 3;
+        for (let i = 0; i < this._items.length; i++) {
+            const item = this._items[i];
+            item._lazyContent = !!this._lazyContent;
+            if (typeof item.estimate === 'function') {
+                item.estimate();
+            }
+            this.height += item.height || 0;
+            this.width = Math.max(this.width, item.width || 0);
             if (item.type === 'node' || item.type === 'node[]') {
                 if (i === this._items.length - 1) {
                     this.height += 3;
@@ -1068,6 +1356,7 @@ mycelium.Argument = class {
         } else if (Array.isArray(content) && content.every((value) => isNodeLike(value))) {
             this.type = 'node[]';
         }
+        this._contentBuilt = false;
     }
 
     build(document, parent) {
@@ -1115,12 +1404,18 @@ mycelium.Argument = class {
         switch (this.type) {
             case 'node': {
                 const node = this.content;
-                node.build(document, this.element);
+                if (!this._lazyContent) {
+                    node.build(document, this.element);
+                    this._contentBuilt = true;
+                }
                 break;
             }
             case 'node[]': {
-                for (const node of this.content) {
-                    node.build(document, this.element);
+                if (!this._lazyContent) {
+                    for (const node of this.content) {
+                        node.build(document, this.element);
+                    }
+                    this._contentBuilt = true;
                 }
                 break;
             }
@@ -1136,21 +1431,73 @@ mycelium.Argument = class {
     async measure() {
         const yPadding = 1;
         const xPadding = 6;
+        if ((this.type === 'node' || this.type === 'node[]') && this._lazyContent && !this._contentBuilt) {
+            this.estimate();
+            return;
+        }
         const size = this.text.getBBox();
+        if ((!Number.isFinite(size.width) || size.width <= 0) &&
+            (!Number.isFinite(size.height) || size.height <= 0)) {
+            this.estimate();
+            return;
+        }
         this.width = xPadding + size.width + xPadding;
         this.bottom = yPadding + size.height + yPadding;
-        this.offset = size.y;
+        this.offset = Number.isFinite(size.y) ? size.y : 0;
+        if (this.offset >= 0 && Number.isFinite(size.height) && size.height > 0) {
+            this.offset = -(size.height - 2);
+        }
         this.height = this.bottom;
         if (this.type === 'node') {
             const node = this.content;
+            if (!this._contentBuilt && !this._lazyContent) {
+                node.build(this.element.ownerDocument, this.element);
+                this._contentBuilt = true;
+            }
             await node.measure();
             this.width = Math.max(150, this.width, node.width + (2 * xPadding));
             this.height += node.height + yPadding + yPadding + yPadding + yPadding;
         } else if (this.type === 'node[]') {
+            if (!this._contentBuilt && !this._lazyContent) {
+                for (const node of this.content) {
+                    node.build(this.element.ownerDocument, this.element);
+                }
+                this._contentBuilt = true;
+            }
             for (const node of this.content) {
                 await node.measure();
                 this.width = Math.max(150, this.width, node.width + (2 * xPadding));
                 this.height += node.height + yPadding + yPadding + yPadding + yPadding;
+            }
+        }
+    }
+
+    estimate() {
+        const yPadding = 1;
+        const xPadding = 6;
+        const left = this.name || '';
+        const right = (this.type === 'node' || this.type === 'node[]') ? '' : `${this.separator || ''}${this.content || ''}`;
+        const text = `${left}${right}`;
+        const textWidth = String(text).length * 7;
+        const textHeight = 14;
+        this.width = xPadding + textWidth + xPadding;
+        this.bottom = yPadding + textHeight + yPadding;
+        this.offset = 0;
+        this.height = this.bottom;
+        if (this.type === 'node') {
+            const node = this.content;
+            if (node && typeof node.estimate === 'function') {
+                node.estimate();
+            }
+            this.width = Math.max(150, this.width, (node && node.width ? node.width : 0) + (2 * xPadding));
+            this.height += (node && node.height ? node.height : 44) + yPadding + yPadding + yPadding + yPadding;
+        } else if (this.type === 'node[]') {
+            for (const node of this.content) {
+                if (node && typeof node.estimate === 'function') {
+                    node.estimate();
+                }
+                this.width = Math.max(150, this.width, (node && node.width ? node.width : 0) + (2 * xPadding));
+                this.height += (node && node.height ? node.height : 44) + yPadding + yPadding + yPadding + yPadding;
             }
         }
     }
@@ -1161,22 +1508,50 @@ mycelium.Argument = class {
         let y = this.y + this.bottom;
         if (this.type === 'node') {
             const node = this.content;
+            if (!this._contentBuilt && !this._lazyContent) {
+                node.build(this.element.ownerDocument, this.element);
+                this._contentBuilt = true;
+            }
             node.width = this.width - xPadding - xPadding;
-            await node.layout();
-            node.x = this.x + xPadding + (node.width / 2);
-            node.y = y + (node.height / 2) + yPadding + yPadding;
-        } else if (this.type === 'node[]') {
-            for (const node of this.content) {
-                node.width = this.width - xPadding - xPadding;
+            if (this._contentBuilt) {
                 await node.layout();
                 node.x = this.x + xPadding + (node.width / 2);
                 node.y = y + (node.height / 2) + yPadding + yPadding;
+            }
+        } else if (this.type === 'node[]') {
+            for (const node of this.content) {
+                if (!this._contentBuilt && !this._lazyContent) {
+                    node.build(this.element.ownerDocument, this.element);
+                }
+                node.width = this.width - xPadding - xPadding;
+                if (this._contentBuilt || !this._lazyContent) {
+                    await node.layout();
+                    node.x = this.x + xPadding + (node.width / 2);
+                    node.y = y + (node.height / 2) + yPadding + yPadding;
+                }
                 y += node.height + yPadding + yPadding + yPadding + yPadding;
+            }
+            if (!this._contentBuilt && !this._lazyContent) {
+                this._contentBuilt = true;
             }
         }
     }
 
     update() {
+        if (!Number.isFinite(this.x) || !Number.isFinite(this.y) || !Number.isFinite(this.width) || !Number.isFinite(this.height)) {
+            const view = this.element && this.element.ownerDocument && this.element.ownerDocument.defaultView;
+            if (view && view.console && view.console.warn) {
+                view.console.warn('[argument-layout] invalid argument geometry', {
+                    name: this.name,
+                    x: this.x,
+                    y: this.y,
+                    width: this.width,
+                    height: this.height,
+                    type: this.type
+                });
+            }
+            return;
+        }
         const yPadding = 1;
         const xPadding = 6;
         this.text.setAttribute('x', this.x + xPadding);
@@ -1185,6 +1560,11 @@ mycelium.Argument = class {
         this.border.setAttribute('y', this.y);
         this.border.setAttribute('width', this.width - 6);
         this.border.setAttribute('height', this.height);
+        if ((this.type === 'node' || this.type === 'node[]') && this._lazyContent && !this._contentBuilt) {
+            this.border.style.display = 'none';
+            return;
+        }
+        this.border.style.display = '';
         if (this.type === 'node') {
             const node = this.content;
             node.update();

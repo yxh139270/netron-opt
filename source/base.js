@@ -1241,6 +1241,7 @@ base.Telemetry = class {
     constructor(window) {
         this._window = window;
         this._navigator = window.navigator;
+        this._enabled = false;
         this._config = new Map();
         this._metadata = {};
         this._schema = new Map([
@@ -1348,6 +1349,9 @@ base.Telemetry = class {
     }
 
     send(name, params) {
+        if (!this._enabled) {
+            return;
+        }
         if (this._session) {
             try {
                 params = { event_name: name, ...this._metadata, ...params };
