@@ -1386,6 +1386,15 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
         };
         assignOrder(g, layering);
+        const orderMode = String(layout.order || 'fast').toLowerCase();
+        if (orderMode === 'fast') {
+            // Fast path: one DFS-based ordering pass only.
+            // Skip layer graph construction and crossing-minimization sweeps.
+            layering = initOrderDfs(g);
+            assignOrder(g, layering);
+            return;
+        }
+
         const rank = maxRank(g) || 0;
         const downLayerGraphs = new Array(rank);
         const upLayerGraphs = new Array(rank);
@@ -1407,14 +1416,6 @@ dagre.layout = (nodes, edges, layout, state) => {
         for (let i = 0; i < rank; i++) {
             downLayerGraphs[i] = buildLayerGraph(g, nodes, rankIndexes, i + 1, true);
             upLayerGraphs[i] = buildLayerGraph(g, nodes, rankIndexes, rank - i - 1, false);
-        }
-
-        const orderMode = String(layout.order || 'fast').toLowerCase();
-        if (orderMode === 'fast') {
-            // Fast default: one DFS-based ordering pass.
-            layering = initOrderDfs(g);
-            assignOrder(g, layering);
-            return;
         }
 
         let bestCC = Number.POSITIVE_INFINITY;
@@ -1777,7 +1778,7 @@ dagre.layout = (nodes, edges, layout, state) => {
         // If the edge connecting a neighbor is a type-1 conflict then we ignore that possibility.
         // If a previous node has already formed a block with a node after the node we're trying to form a block with,
         // we also ignore that possibility - our blocks would be split in that scenario.
-        const verticalAlignment = (layering, conflicts, neighborFn) => {
+        const verticalAlignment = (layering, conflicts, neighborListFn) => {
             const root = new Map();
             const align = new Map();
             const pos = new Map();
@@ -1795,18 +1796,16 @@ dagre.layout = (nodes, edges, layout, state) => {
             for (const layer of layering) {
                 let prevIdx = -1;
                 for (const v of layer) {
-                    const wsMap = neighborFn(v);
-                    if (wsMap.size > 0) {
+                    const wsRaw = neighborListFn(v);
+                    if (wsRaw.length > 0) {
                         let ws = null;
-                        if (wsMap.size === 1) {
-                            ws = [wsMap.keys().next().value];
-                        } else if (wsMap.size === 2) {
-                            const it = wsMap.keys();
-                            const w0 = it.next().value;
-                            const w1 = it.next().value;
+                        if (wsRaw.length === 1) {
+                            ws = wsRaw;
+                        } else if (wsRaw.length === 2) {
+                            const [w0, w1] = wsRaw;
                             ws = pos.get(w0) <= pos.get(w1) ? [w0, w1] : [w1, w0];
                         } else {
-                            ws = Array.from(wsMap.keys());
+                            ws = wsRaw.slice();
                             ws.sort((a, b) => pos.get(a) - pos.get(b));
                         }
                         const mp = (ws.length - 1) / 2.0000001;
@@ -1898,6 +1897,18 @@ dagre.layout = (nodes, edges, layout, state) => {
         // single node in the layers being scanned.
         const findType1Conflicts = (g, layering) => {
             const conflicts = new Map();
+            const predOrderCache = new Map();
+            const getPredOrders = (v) => {
+                if (!predOrderCache.has(v)) {
+                    const values = [];
+                    for (const u of getPredecessors(v)) {
+                        const label = getLabel(u);
+                        values.push({ u, order: label.order, dummy: !!label.dummy });
+                    }
+                    predOrderCache.set(v, values);
+                }
+                return predOrderCache.get(v);
+            };
             if (layering.length > 0) {
                 let [prev] = layering;
                 for (let k = 1; k < layering.length; k++) {
@@ -1910,19 +1921,19 @@ dagre.layout = (nodes, edges, layout, state) => {
                     const lastNode = layer[layer.length - 1];
                     for (let i = 0; i < layer.length; i++) {
                         const v = layer[i];
-                        const w = g.node(v).label.dummy ? Array.from(g.predecessors(v).keys()).find((u) => g.node(u).label.dummy) : null;
+                        const vLabel = getLabel(v);
+                        const w = vLabel.dummy ? getPredecessors(v).find((u) => getLabel(u).dummy) : null;
                         if (w || v === lastNode) {
-                            const k1 = w ? g.node(w).label.order : prevLayerLength;
+                            const k1 = w ? getLabel(w).order : prevLayerLength;
                             for (let j = scanPos; j <= i; j++) {
                                 const scanNode = layer[j];
-                                const scanNodeLabel = g.node(scanNode).label;
-                                const predecessors = g.predecessors(scanNode);
-                                if (predecessors.size > 0) {
-                                    for (const u of predecessors.keys()) {
-                                        const uLabel = g.node(u).label;
-                                        const uPos = uLabel.order;
-                                        if ((uPos < k0 || k1 < uPos) && !(uLabel.dummy && scanNodeLabel.dummy)) {
-                                            addConflict(conflicts, u, scanNode);
+                                const scanNodeLabel = getLabel(scanNode);
+                                const predOrders = getPredOrders(scanNode);
+                                if (predOrders.length > 0) {
+                                    for (const entry of predOrders) {
+                                        const uPos = entry.order;
+                                        if ((uPos < k0 || k1 < uPos) && !(entry.dummy && scanNodeLabel.dummy)) {
+                                            addConflict(conflicts, entry.u, scanNode);
                                         }
                                     }
                                 }
@@ -1942,9 +1953,9 @@ dagre.layout = (nodes, edges, layout, state) => {
             const scan = (south, southPos, southEnd, prevNorthBorder, nextNorthBorder) => {
                 for (let i = southPos; i < southEnd; i++) {
                     const v = south[i];
-                    if (g.node(v).labeldummy) {
-                        for (const u of g.predecessors(v).keys()) {
-                            const uNode = g.node(u).label;
+                    if (getLabel(v).dummy) {
+                        for (const u of getPredecessors(v)) {
+                            const uNode = getLabel(u);
                             if (uNode.dummy && (uNode.order < prevNorthBorder || uNode.order > nextNorthBorder)) {
                                 addConflict(conflicts, u, v);
                             }
@@ -1961,10 +1972,10 @@ dagre.layout = (nodes, edges, layout, state) => {
                     let nextNorthPos = 0;
                     let southPos = 0;
                     south.forEach((v, southLookahead) => {
-                        if (g.node(v).label.dummy === 'border') {
-                            const predecessors = g.predecessors(v);
-                            if (predecessors.size > 0) {
-                                nextNorthPos = g.node(predecessors.keys().next().value).label.order;
+                        if (getLabel(v).dummy === 'border') {
+                            const predecessors = getPredecessors(v);
+                            if (predecessors.length > 0) {
+                                nextNorthPos = getLabel(predecessors[0]).order;
                                 scan(south, southPos, southLookahead, prevNorthPos, nextNorthPos);
                                 southPos = southLookahead;
                                 prevNorthPos = nextNorthPos;
@@ -1980,6 +1991,27 @@ dagre.layout = (nodes, edges, layout, state) => {
         };
 
         g = asNonCompoundGraph(g);
+        const labelCache = new Map();
+        const predecessorCache = new Map();
+        const successorCache = new Map();
+        const getLabel = (v) => {
+            if (!labelCache.has(v)) {
+                labelCache.set(v, g.node(v).label);
+            }
+            return labelCache.get(v);
+        };
+        const getPredecessors = (v) => {
+            if (!predecessorCache.has(v)) {
+                predecessorCache.set(v, Array.from(g.predecessors(v).keys()));
+            }
+            return predecessorCache.get(v);
+        };
+        const getSuccessors = (v) => {
+            if (!successorCache.has(v)) {
+                successorCache.set(v, Array.from(g.successors(v).keys()));
+            }
+            return successorCache.get(v);
+        };
         let marker = now();
         const layering = buildLayerMatrix(g);
         pushTiming('position.buildLayerMatrix', marker);
@@ -1988,9 +2020,12 @@ dagre.layout = (nodes, edges, layout, state) => {
         marker = now();
         let y = 0;
         for (const layer of layering) {
-            const maxHeight = layer.reduce((a, v) => Math.max(a, g.node(v).label.height), 0);
+            let maxHeight = 0;
             for (const v of layer) {
-                g.node(v).label.y = y + maxHeight / 2;
+                maxHeight = Math.max(maxHeight, getLabel(v).height);
+            }
+            for (const v of layer) {
+                getLabel(v).y = y + maxHeight / 2;
             }
             y += maxHeight + ranksep;
         }
@@ -2011,9 +2046,9 @@ dagre.layout = (nodes, edges, layout, state) => {
                 if (horizontal === 'r') {
                     adjustedLayering = adjustedLayering.map((layer) => Object.values(layer).reverse());
                 }
-                const neighborFn = (vertical === 'u' ? g.predecessors : g.successors).bind(g);
+                const neighborListFn = vertical === 'u' ? getPredecessors : getSuccessors;
                 marker = now();
-                const align = verticalAlignment(adjustedLayering, conflicts, neighborFn);
+                const align = verticalAlignment(adjustedLayering, conflicts, neighborListFn);
                 pushTiming(`position.verticalAlignment.${vertical}${horizontal}`, marker);
                 marker = now();
                 const xs = horizontalCompaction(g, layout, adjustedLayering, align.root, align.align, horizontal === 'r');
