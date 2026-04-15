@@ -442,9 +442,6 @@ mycelium.Graph = class {
 
     async layout(worker, options) {
         const estimateOnly = options && options.estimateOnly;
-        if (typeof console !== 'undefined' && console.warn) {
-            console.warn(`[mycelium-layout] worker=${worker ? 'on' : 'off'} estimateOnly=${estimateOnly ? 'on' : 'off'}`);
-        }
         const debugNodeTitle = (label) => {
             if (!label) {
                 return '';
@@ -546,16 +543,7 @@ mycelium.Graph = class {
             const dagre = await import('./dagre-fast.js');
             dagre.layout(nodes, edges, layout, state);
         }
-        if (state.log) {
-            if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-                const fs = await import('fs');
-                fs.writeFileSync(`dist/test/${this.identifier}.log`, state.log);
-            } else if (typeof window !== 'undefined' && window.console && window.console.info) {
-                window.console.info(state.log);
-            }
-        } else if (typeof window !== 'undefined' && window.console && window.console.warn) {
-            window.console.warn('[mycelium] dagre state.log is empty');
-        }
+        state.log = '';
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;

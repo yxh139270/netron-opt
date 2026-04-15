@@ -12,9 +12,6 @@ view.View = class {
 
     constructor(host) {
         this._host = host;
-        if (typeof console !== 'undefined' && console.info) {
-            console.info('[netron-opt] build marker: view-2026-04-15-debug-worker-off');
-        }
         this._defaultOptions = {
             weights: true,
             attributes: false,
@@ -23,7 +20,7 @@ view.View = class {
             mousewheel: 'scroll',
             layoutEstimateMode: 'auto',
             layoutEstimateThreshold: 1500,
-            layoutDebug: true
+            layoutDebug: false
         };
         this._options = { ...this._defaultOptions };
         this._events = {};
@@ -496,48 +493,6 @@ view.View = class {
                 status = await viewGraph.layout(this._worker, { estimateOnly: false });
             }
             if (status === '') {
-                if (this.options.layoutDebug && document && document.defaultView && document.defaultView.console) {
-                    const debugMultiInput = [];
-                    const inDegree = new Map();
-                    for (const edge of viewGraph.edges.values()) {
-                        inDegree.set(edge.w, (inDegree.get(edge.w) || 0) + 1);
-                    }
-                    for (const [nodeId, degree] of inDegree) {
-                        if (degree > 1) {
-                            debugMultiInput.push(nodeId);
-                        }
-                    }
-                    const focused = debugMultiInput.filter((id) => String(id).includes('Times212'));
-                    const targets = focused.length > 0 ? focused : debugMultiInput.slice(0, 10);
-                    if (targets.length > 0) {
-                        document.defaultView.console.warn('[layout-debug] refresh multi-input targets', targets);
-                        for (const targetId of targets) {
-                            const entry = viewGraph.node(targetId);
-                            const node = entry && entry.label ? entry.label : null;
-                            if (node) {
-                                document.defaultView.console.warn(`[layout-debug] refresh node ${targetId} @ (${node.x}, ${node.y})`);
-                            }
-                            for (const edge of viewGraph.edges.values()) {
-                                if (edge.w === targetId && edge.label) {
-                                    const pts = Array.isArray(edge.label.points) ? edge.label.points : [];
-                                    const p1 = pts.length > 1 ? pts[1] : null;
-                                    const p2 = pts.length > 2 ? pts[2] : null;
-                                    const end = pts.length > 0 ? pts[pts.length - 1] : null;
-                                    document.defaultView.console.warn('[layout-debug] refresh edge', {
-                                        edge: `${edge.v}->${edge.w}`,
-                                        p1,
-                                        p2,
-                                        end,
-                                        labelX: edge.label.x,
-                                        labelY: edge.label.y
-                                    });
-                                }
-                            }
-                        }
-                    } else {
-                        document.defaultView.console.warn('[layout-debug] refresh no multi-input nodes found');
-                    }
-                }
                 for (const child of oldChildren) {
                     if (child.parentNode === origin) {
                         origin.removeChild(child);
@@ -552,9 +507,6 @@ view.View = class {
                     const stats = await viewGraph.refineViewport(200);
                     this.host.event('lazy_refine', stats || {});
                     const view = document && document.defaultView;
-                    if (view && view.console && view.console.info) {
-                        view.console.info('[lazy-refine] render refine stats', stats || {});
-                    }
                     status = await viewGraph.layout(this._worker, { estimateOnly: false });
                     if (status === '') {
                         viewGraph.restore(state);
@@ -565,9 +517,6 @@ view.View = class {
                     }
                     const stats2 = await viewGraph.refineViewport(400);
                     this.host.event('lazy_refine', stats2 || {});
-                    if (view && view.console && view.console.info) {
-                        view.console.info('[lazy-refine] render refine stats (pass2)', stats2 || {});
-                    }
                     status = await viewGraph.layout(this._worker, { estimateOnly: false });
                     if (status === '') {
                         viewGraph.restore(state);
@@ -1053,57 +1002,12 @@ view.View = class {
                 status = await viewGraph.layout(this._worker, { estimateOnly: false });
             }
             if (status === '') {
-                if (this.options.layoutDebug && document && document.defaultView && document.defaultView.console) {
-                    const debugMultiInput = [];
-                    const inDegree = new Map();
-                    for (const edge of viewGraph.edges.values()) {
-                        inDegree.set(edge.w, (inDegree.get(edge.w) || 0) + 1);
-                    }
-                    for (const [nodeId, degree] of inDegree) {
-                        if (degree > 1) {
-                            debugMultiInput.push(nodeId);
-                        }
-                    }
-                    const focused = debugMultiInput.filter((id) => String(id).includes('Times212'));
-                    const targets = focused.length > 0 ? focused : debugMultiInput.slice(0, 10);
-                    if (targets.length > 0) {
-                        document.defaultView.console.warn('[layout-debug] multi-input targets', targets);
-                        for (const targetId of targets) {
-                            const entry = viewGraph.node(targetId);
-                            const node = entry && entry.label ? entry.label : null;
-                            if (node) {
-                                document.defaultView.console.warn(`[layout-debug] node ${targetId} @ (${node.x}, ${node.y})`);
-                            }
-                            for (const edge of viewGraph.edges.values()) {
-                                if (edge.w === targetId && edge.label) {
-                                    const pts = Array.isArray(edge.label.points) ? edge.label.points : [];
-                                    const p1 = pts.length > 1 ? pts[1] : null;
-                                    const p2 = pts.length > 2 ? pts[2] : null;
-                                    const end = pts.length > 0 ? pts[pts.length - 1] : null;
-                                    document.defaultView.console.warn('[layout-debug] edge', {
-                                        edge: `${edge.v}->${edge.w}`,
-                                        p1,
-                                        p2,
-                                        end,
-                                        labelX: edge.label.x,
-                                        labelY: edge.label.y
-                                    });
-                                }
-                            }
-                        }
-                    } else {
-                        document.defaultView.console.warn('[layout-debug] no multi-input nodes found');
-                    }
-                }
                 viewGraph.restore(state);
                 viewGraph._updateViewport();
                 if (typeof viewGraph.refineViewport === 'function') {
                     const stats = await viewGraph.refineViewport(200);
                     this.host.event('lazy_refine', stats || {});
                     const view = document && document.defaultView;
-                    if (view && view.console && view.console.info) {
-                        view.console.info('[lazy-refine] refresh refine stats', stats || {});
-                    }
                     status = await viewGraph.layout(this._worker, { estimateOnly: false });
                     if (status === '') {
                         viewGraph.restore(state);
@@ -1114,9 +1018,6 @@ view.View = class {
                     }
                     const stats2 = await viewGraph.refineViewport(400);
                     this.host.event('lazy_refine', stats2 || {});
-                    if (view && view.console && view.console.info) {
-                        view.console.info('[lazy-refine] refresh refine stats (pass2)', stats2 || {});
-                    }
                     status = await viewGraph.layout(this._worker, { estimateOnly: false });
                     if (status === '') {
                         viewGraph.restore(state);
