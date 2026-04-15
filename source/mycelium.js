@@ -540,7 +540,7 @@ mycelium.Graph = class {
             edges = message.edges;
             state.log = message.state.log;
         } else {
-            const dagre = await import('./dagre-fast.js');
+            const dagre = await import('./dagre-order.js');
             dagre.layout(nodes, edges, layout, state);
         }
         state.log = '';

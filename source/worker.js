@@ -4,7 +4,7 @@ const require = async () => {
         const worker_threads = await import('worker_threads');
         return worker_threads.parentPort;
     }
-    import('./dagre-fast.js');
+    import('./dagre-order.js');
     return self;
 };
 
@@ -14,7 +14,7 @@ require().then((self) => {
         switch (message.type) {
             case 'dagre.layout': {
                 try {
-                    const dagre = await import('./dagre-fast.js');
+                    const dagre = await import('./dagre-order.js');
                     dagre.layout(message.nodes, message.edges, message.layout, message.state);
                     if (typeof console !== 'undefined' && console.warn) {
                         const hasLog = !!(message.state && message.state.log);
