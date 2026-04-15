@@ -502,7 +502,8 @@ dagre.layout = (nodes, edges, layout, state) => {
                 exchangeEdges(t, g, e, f);
             }
         };
-        switch (layout.ranker) {
+        const ranker = layout.ranker || 'tight-tree';
+        switch (ranker) {
             case 'tight-tree':
                 longestPath(g);
                 feasibleTree(g);
@@ -1692,6 +1693,15 @@ dagre.layout = (nodes, edges, layout, state) => {
     };
 
     const position = (g, state, layout) => {
+        const positionProfile = !!layout.profileStages;
+        const fastOrderMode = String(layout.order || '').toLowerCase() === 'fast';
+        const positionTimings = [];
+        const now = () => Date.now();
+        const pushTiming = (name, start) => {
+            if (positionProfile) {
+                positionTimings.push({ name, ms: now() - start });
+            }
+        };
         const addConflict = (conflicts, v, w) => {
             if (v > w) {
                 [v, w] = [w, v];
@@ -1958,9 +1968,12 @@ dagre.layout = (nodes, edges, layout, state) => {
         };
 
         g = asNonCompoundGraph(g);
+        let marker = now();
         const layering = buildLayerMatrix(g);
+        pushTiming('position.buildLayerMatrix', marker);
         const ranksep = layout.ranksep;
         // Assign y-coordinate based on rank
+        marker = now();
         let y = 0;
         for (const layer of layering) {
             const maxHeight = layer.reduce((a, v) => Math.max(a, g.node(v).label.height), 0);
@@ -1969,18 +1982,30 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
             y += maxHeight + ranksep;
         }
+        pushTiming('position.assignY', marker);
         // Coordinate assignment based on Brandes and Köpf, 'Fast and Simple Horizontal Coordinate Assignment.'
-        const conflicts = new Map([...findType1Conflicts(g, layering).entries(), ...findType2Conflicts(g, layering).entries()]);
+        marker = now();
+        const type1Conflicts = findType1Conflicts(g, layering);
+        pushTiming('position.findType1Conflicts', marker);
+        marker = now();
+        const type2Conflicts = findType2Conflicts(g, layering);
+        pushTiming('position.findType2Conflicts', marker);
+        const conflicts = new Map([...type1Conflicts.entries(), ...type2Conflicts.entries()]);
         const xss = {};
-        for (const vertical of ['u', 'd']) {
+        const verticalPasses = fastOrderMode ? ['u'] : ['u', 'd'];
+        for (const vertical of verticalPasses) {
             let adjustedLayering = vertical === 'u' ? layering : Object.values(layering).reverse();
             for (const horizontal of ['l', 'r']) {
                 if (horizontal === 'r') {
                     adjustedLayering = adjustedLayering.map((layer) => Object.values(layer).reverse());
                 }
                 const neighborFn = (vertical === 'u' ? g.predecessors : g.successors).bind(g);
+                marker = now();
                 const align = verticalAlignment(adjustedLayering, conflicts, neighborFn);
+                pushTiming(`position.verticalAlignment.${vertical}${horizontal}`, marker);
+                marker = now();
                 const xs = horizontalCompaction(g, layout, adjustedLayering, align.root, align.align, horizontal === 'r');
+                pushTiming(`position.horizontalCompaction.${vertical}${horizontal}`, marker);
                 if (horizontal === 'r') {
                     for (const [key, value] of xs.entries(xs)) {
                         xs.set(key, -value);
@@ -1990,6 +2015,7 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
         }
         // Find smallest width alignment: Returns the alignment that has the smallest width of the given alignments.
+        marker = now();
         let minWidth = Number.POSITIVE_INFINITY;
         let minValue = null;
         for (const xs of Object.values(xss)) {
@@ -2006,6 +2032,7 @@ dagre.layout = (nodes, edges, layout, state) => {
                 minValue = xs;
             }
         }
+        pushTiming('position.findSmallestWidthAlignment', marker);
         // Align the coordinates of each of the layout alignments such that
         // left-biased alignments have their minimum coordinate at the same point as
         // the minimum coordinate of the smallest width alignment and right-biased
@@ -2025,36 +2052,61 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
             return [min, max];
         };
+        const availableAlignments = Object.keys(xss);
+        marker = now();
         const alignToRange = range(alignTo.values(alignTo));
-        for (const vertical of ['u', 'd']) {
-            for (const horizontal of ['l', 'r']) {
-                const alignment = vertical + horizontal;
-                const xs = xss[alignment];
-                if (xs !== alignTo) {
-                    const vsValsRange = range(xs.values());
-                    const delta = horizontal === 'l' ? alignToRange[0] - vsValsRange[0] : alignToRange[1] - vsValsRange[1];
-                    if (delta) {
-                        const list = new Map();
-                        for (const [key, value] of xs.entries()) {
-                            list.set(key, value + delta);
-                        }
-                        xss[alignment] = list;
+        for (const alignment of availableAlignments) {
+            const xs = xss[alignment];
+            if (xs !== alignTo) {
+                const vsValsRange = range(xs.values());
+                const delta = alignment.endsWith('l') ? alignToRange[0] - vsValsRange[0] : alignToRange[1] - vsValsRange[1];
+                if (delta) {
+                    const list = new Map();
+                    for (const [key, value] of xs.entries()) {
+                        list.set(key, value + delta);
                     }
+                    xss[alignment] = list;
                 }
             }
         }
+        pushTiming('position.alignCoordinates', marker);
         // balance
         const align = layout.align;
+        marker = now();
         if (align) {
-            const xs = xss[align.toLowerCase()];
-            for (const v of xss.ul.keys()) {
+            const xs = xss[align.toLowerCase()] || xss.ul || xss.ur || xss.dl || xss.dr;
+            const base = xss.ul || xss.ur || xss.dl || xss.dr;
+            const keys = base ? base.keys() : [];
+            for (const v of keys) {
                 g.node(v).label.x = xs.get(v);
             }
         } else {
-            for (const v of xss.ul.keys()) {
-                const xs = [xss.ul.get(v), xss.ur.get(v), xss.dl.get(v), xss.dr.get(v)].sort((a, b) => a - b);
-                g.node(v).label.x = (xs[1] + xs[2]) / 2;
+            const base = xss.ul || xss.ur || xss.dl || xss.dr;
+            const keys = base ? base.keys() : [];
+            if (fastOrderMode) {
+                const ul = xss.ul || xss.ur || xss.dl || xss.dr;
+                const ur = xss.ur || xss.ul || xss.dr || xss.dl;
+                for (const v of keys) {
+                    g.node(v).label.x = (ul.get(v) + ur.get(v)) / 2;
+                }
+            } else {
+                for (const v of keys) {
+                    const values = [xss.ul.get(v), xss.ur.get(v), xss.dl.get(v), xss.dr.get(v)];
+                    let min = Number.POSITIVE_INFINITY;
+                    let max = Number.NEGATIVE_INFINITY;
+                    let sum = 0;
+                    for (const value of values) {
+                        min = Math.min(min, value);
+                        max = Math.max(max, value);
+                        sum += value;
+                    }
+                    g.node(v).label.x = (sum - min - max) / 2;
+                }
             }
+        }
+        pushTiming('position.balance', marker);
+        if (positionProfile) {
+            state.positionTimings = positionTimings;
         }
     };
 
@@ -2259,12 +2311,18 @@ dagre.layout = (nodes, edges, layout, state) => {
         assignNodeIntersects,
         acyclic_undo
     ];
+    const profileStages = !!layout.profileStages;
+    const stageTimings = [];
     while (tasks.length > 0) {
-        // const start = Date.now();
         const task = tasks.shift();
-        task(g, state, layout);
-        // const duration = Date.now() - start;
-        // console.log(`${task.name}: ${duration}ms`);
+        if (profileStages) {
+            const start = Date.now();
+            task(g, state, layout);
+            const duration = Date.now() - start;
+            stageTimings.push({ name: task.name || 'anonymous', ms: duration });
+        } else {
+            task(g, state, layout);
+        }
     }
 
     // Update source graph
@@ -2284,6 +2342,11 @@ dagre.layout = (nodes, edges, layout, state) => {
             edge.x = label.x;
             edge.y = label.y;
         }
+    }
+    if (profileStages) {
+        const total = stageTimings.reduce((sum, item) => sum + item.ms, 0);
+        state.stageTimings = stageTimings;
+        state.stageTotalMs = total;
     }
     if (state.log) {
         state.log = g.toString();
