@@ -1377,7 +1377,6 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
             return graph;
         };
-        let layering = initOrder(g);
         const assignOrder = (g, layering) => {
             for (const layer of layering) {
                 for (let i = 0; i < layer.length; i++) {
@@ -1385,15 +1384,17 @@ dagre.layout = (nodes, edges, layout, state) => {
                 }
             }
         };
-        assignOrder(g, layering);
         const orderMode = String(layout.order || 'fast').toLowerCase();
         if (orderMode === 'fast') {
             // Fast path: one DFS-based ordering pass only.
             // Skip layer graph construction and crossing-minimization sweeps.
-            layering = initOrderDfs(g);
+            const layering = initOrderDfs(g);
             assignOrder(g, layering);
             return;
         }
+
+        let layering = initOrder(g);
+        assignOrder(g, layering);
 
         const rank = maxRank(g) || 0;
         const downLayerGraphs = new Array(rank);
