@@ -1795,20 +1795,31 @@ dagre.layout = (nodes, edges, layout, state) => {
             for (const layer of layering) {
                 let prevIdx = -1;
                 for (const v of layer) {
-                    let ws = neighborFn(v);
-                    if (ws.size > 0) {
-                        ws = Array.from(ws.keys());
-                        ws = ws.sort((a, b) => pos.get(a) - pos.get(b));
+                    const wsMap = neighborFn(v);
+                    if (wsMap.size > 0) {
+                        let ws = null;
+                        if (wsMap.size === 1) {
+                            ws = [wsMap.keys().next().value];
+                        } else if (wsMap.size === 2) {
+                            const it = wsMap.keys();
+                            const w0 = it.next().value;
+                            const w1 = it.next().value;
+                            ws = pos.get(w0) <= pos.get(w1) ? [w0, w1] : [w1, w0];
+                        } else {
+                            ws = Array.from(wsMap.keys());
+                            ws.sort((a, b) => pos.get(a) - pos.get(b));
+                        }
                         const mp = (ws.length - 1) / 2.0000001;
                         const il = Math.ceil(mp);
                         for (let i = Math.floor(mp); i <= il; i++) {
                             const w = ws[i];
-                            if (align.get(v) === v && prevIdx < pos.get(w) && !hasConflict(conflicts, v, w)) {
+                            const wPos = pos.get(w);
+                            if (align.get(v) === v && prevIdx < wPos && !hasConflict(conflicts, v, w)) {
                                 const x = root.get(w);
                                 align.set(w, v);
                                 align.set(v, x);
                                 root.set(v, x);
-                                prevIdx = pos.get(w);
+                                prevIdx = wPos;
                             }
                         }
                     }
@@ -1902,14 +1913,15 @@ dagre.layout = (nodes, edges, layout, state) => {
                         const w = g.node(v).label.dummy ? Array.from(g.predecessors(v).keys()).find((u) => g.node(u).label.dummy) : null;
                         if (w || v === lastNode) {
                             const k1 = w ? g.node(w).label.order : prevLayerLength;
-                            for (const scanNode of layer.slice(scanPos, i + 1)) {
-                            // for (const scanNode of layer.slice(scanPos, scanPos + 1)) {
+                            for (let j = scanPos; j <= i; j++) {
+                                const scanNode = layer[j];
+                                const scanNodeLabel = g.node(scanNode).label;
                                 const predecessors = g.predecessors(scanNode);
                                 if (predecessors.size > 0) {
-                                    for (const u of g.predecessors(scanNode).keys()) {
+                                    for (const u of predecessors.keys()) {
                                         const uLabel = g.node(u).label;
                                         const uPos = uLabel.order;
-                                        if ((uPos < k0 || k1 < uPos) && !(uLabel.dummy && g.node(scanNode).label.dummy)) {
+                                        if ((uPos < k0 || k1 < uPos) && !(uLabel.dummy && scanNodeLabel.dummy)) {
                                             addConflict(conflicts, u, scanNode);
                                         }
                                     }
@@ -2017,19 +2029,21 @@ dagre.layout = (nodes, edges, layout, state) => {
         // Find smallest width alignment: Returns the alignment that has the smallest width of the given alignments.
         marker = now();
         let minWidth = Number.POSITIVE_INFINITY;
-        let minValue = null;
-        for (const xs of Object.values(xss)) {
-            let max = Number.NEGATIVE_INFINITY;
-            let min = Number.POSITIVE_INFINITY;
-            for (const [v, x] of xs.entries()) {
-                const halfWidth = g.node(v).label.width / 2;
-                max = Math.max(x + halfWidth, max);
-                min = Math.min(x - halfWidth, min);
-            }
-            const width = max - min;
-            if (width < minWidth) {
-                minWidth = width;
-                minValue = xs;
+        let minValue = fastOrderMode ? (xss.ul || xss.ur) : null;
+        if (!fastOrderMode) {
+            for (const xs of Object.values(xss)) {
+                let max = Number.NEGATIVE_INFINITY;
+                let min = Number.POSITIVE_INFINITY;
+                for (const [v, x] of xs.entries()) {
+                    const halfWidth = g.node(v).label.width / 2;
+                    max = Math.max(x + halfWidth, max);
+                    min = Math.min(x - halfWidth, min);
+                }
+                const width = max - min;
+                if (width < minWidth) {
+                    minWidth = width;
+                    minValue = xs;
+                }
             }
         }
         pushTiming('position.findSmallestWidthAlignment', marker);
