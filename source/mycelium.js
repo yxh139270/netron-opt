@@ -445,6 +445,40 @@ mycelium.Graph = class {
         if (typeof console !== 'undefined' && console.warn) {
             console.warn(`[mycelium-layout] worker=${worker ? 'on' : 'off'} estimateOnly=${estimateOnly ? 'on' : 'off'}`);
         }
+        const debugNodeTitle = (label) => {
+            if (!label) {
+                return '';
+            }
+            const modelNode = label.value || null;
+            const modelName = modelNode && typeof modelNode.name === 'string' ? modelNode.name : '';
+            const modelIdentifier = modelNode && typeof modelNode.identifier === 'string' ? modelNode.identifier : '';
+            const modelType = modelNode && modelNode.type && typeof modelNode.type.name === 'string' ? modelNode.type.name : '';
+            if (this.options && this.options.names && (modelName || modelIdentifier)) {
+                return modelName || modelIdentifier;
+            }
+            if (modelType) {
+                const parts = modelType.split('.');
+                return parts.length > 0 ? parts[parts.length - 1] : modelType;
+            }
+            return label.name || label.identifier || '';
+        };
+        const debugTensorHint = (label) => {
+            const modelNode = label && label.value ? label.value : null;
+            if (!modelNode || !Array.isArray(modelNode.outputs)) {
+                return '';
+            }
+            for (const output of modelNode.outputs) {
+                if (!output || !Array.isArray(output.value)) {
+                    continue;
+                }
+                for (const value of output.value) {
+                    if (value && typeof value.name === 'string' && value.name !== '') {
+                        return value.name;
+                    }
+                }
+            }
+            return '';
+        };
         let nodes = [];
         for (const node of this.nodes.values()) {
             node.label._lazyMeasure = !!estimateOnly;
@@ -462,6 +496,11 @@ mycelium.Graph = class {
             }
             nodes.push({
                 v: node.v,
+                name: node.label && (node.label.name || node.label.identifier || ''),
+                title: debugNodeTitle(node.label),
+                tensor: debugTensorHint(node.label),
+                identifier: node.label && (node.label.identifier || ''),
+                type: node.label && node.label.type && node.label.type.name ? node.label.type.name : '',
                 width: node.label.width || 0,
                 height: node.label.height || 0,
                 parent: this.parent(node.v)
