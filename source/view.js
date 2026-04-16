@@ -782,10 +782,19 @@ view.View = class {
     }
 
     async open(context) {
+        const openStart = this._now();
+        const identifier = context && context.identifier ? context.identifier : '';
+        this._log(`[model-open] start${identifier ? ` identifier=${identifier}` : ''}`);
         this._sidebar.close();
         await this._timeout(2);
         try {
+            const factoryStart = this._now();
             const model = await this._modelFactoryService.open(context);
+            this._logDuration('[model-open] factory.open', factoryStart, {
+                modules: Array.isArray(model.modules) ? model.modules.length : 0,
+                functions: Array.isArray(model.functions) ? model.functions.length : 0,
+                format: model.format || ''
+            });
             const format = [];
             if (model.format) {
                 format.push(model.format);
@@ -813,9 +822,19 @@ view.View = class {
                 const signature = Array.isArray(target.signatures) && target.signatures.length > 0 ? target.signatures[0] : null;
                 path.push({ target, signature });
             }
-            return await this._updateTarget(model, path);
+            const updateStart = this._now();
+            const result = await this._updateTarget(model, path);
+            this._logDuration('[model-open] update-target', updateStart, {
+                path: path.length,
+                target: target && (target.identifier || target.name) ? (target.identifier || target.name) : ''
+            });
+            this._logDuration('[model-open] total', openStart);
+            return result;
         } catch (error) {
             error.context = !error.context && context && context.identifier ? context.identifier : error.context || '';
+            this._logDuration('[model-open] failed', openStart, {
+                error: error && error.message ? error.message : ''
+            });
             throw error;
         }
     }
@@ -970,6 +989,7 @@ view.View = class {
     }
 
     async render(target, signature) {
+        const renderStart = this._now();
         this.target = null;
         const element = this._element('target');
         while (element.lastChild) {
@@ -981,6 +1001,7 @@ view.View = class {
             const graph = target;
             const groups = graph.groups || false;
             const nodes = graph.nodes;
+            this._log(`[render] start nodes=${Array.isArray(nodes) ? nodes.length : 0} signature=${signature && signature.name ? signature.name : ''}`);
             this._host.event('graph_view', {
                 graph_node_count: nodes.length,
                 graph_skip: 0
@@ -993,41 +1014,98 @@ view.View = class {
             viewGraph.add(graph, signature);
             viewGraph.addTunnels();
             const layoutOptions = this._layoutOptions(graph);
+            const buildStart = this._now();
             viewGraph.build(document, null, { lazyLeafNodes: layoutOptions.estimateOnly });
+            this._logDuration('[render] build', buildStart, layoutOptions);
             if (layoutOptions.estimateOnly) {
+                const layoutStart = this._now();
                 status = await viewGraph.layout(this._worker, layoutOptions);
+                this._logDuration('[render] estimate-layout', layoutStart, { status });
                 // Keep estimate-only path lazy to avoid full DOM creation on large graphs.
             } else {
+                const measureStart = this._now();
                 await viewGraph.measure();
+                this._logDuration('[render] measure', measureStart);
+                const layoutStart = this._now();
                 status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                this._logDuration('[render] layout', layoutStart, { status });
             }
             if (status === '') {
                 viewGraph.restore(state);
                 viewGraph._updateViewport();
                 if (typeof viewGraph.refineViewport === 'function') {
+                    const hasRefineWork = (stats) => !!stats && (
+                        (Number.isFinite(stats.attempts) && stats.attempts > 0) ||
+                        (Number.isFinite(stats.refined) && stats.refined > 0) ||
+                        (Number.isFinite(stats.failures) && stats.failures > 0)
+                    );
+                    const refineStart = this._now();
                     const stats = await viewGraph.refineViewport(200);
+                    this._logDuration('[render] refine-200', refineStart, stats || {});
                     this.host.event('lazy_refine', stats || {});
                     const view = document && document.defaultView;
-                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
-                    if (status === '') {
-                        viewGraph.restore(state);
+                    if (hasRefineWork(stats)) {
+                        const layoutStart = this._now();
+                        status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                        this._logDuration('[render] relayout-1', layoutStart, { status });
+                        if (status === '') {
+                            viewGraph.restore(state);
+                        }
+                    } else {
+                        this._log('[render] relayout-1 skipped attempts=0 refined=0 failures=0');
                     }
                     viewGraph._updateViewport();
                     if (view && typeof view.requestAnimationFrame === 'function') {
                         await new Promise((resolve) => view.requestAnimationFrame(() => view.requestAnimationFrame(resolve)));
                     }
+                    const refineStart2 = this._now();
                     const stats2 = await viewGraph.refineViewport(400);
+                    this._logDuration('[render] refine-400', refineStart2, stats2 || {});
                     this.host.event('lazy_refine', stats2 || {});
-                    status = await viewGraph.layout(this._worker, { estimateOnly: false });
-                    if (status === '') {
-                        viewGraph.restore(state);
-                        viewGraph._updateViewport();
+                    if (hasRefineWork(stats2)) {
+                        const layoutStart2 = this._now();
+                        status = await viewGraph.layout(this._worker, { estimateOnly: false });
+                        this._logDuration('[render] relayout-2', layoutStart2, { status });
+                        if (status === '') {
+                            viewGraph.restore(state);
+                            viewGraph._updateViewport();
+                        }
+                    } else {
+                        this._log('[render] relayout-2 skipped attempts=0 refined=0 failures=0');
                     }
                 }
                 this.target = viewGraph;
             }
         }
+        this._logDuration('[render] total', renderStart, { status });
         return status;
+    }
+
+    _now() {
+        const window = this._host && this._host.window;
+        const performance = window && window.performance;
+        if (performance && typeof performance.now === 'function') {
+            return performance.now();
+        }
+        return Date.now();
+    }
+
+    _log(message) {
+        if (globalThis.console && typeof globalThis.console.log === 'function') {
+            globalThis.console.log(message);
+        }
+    }
+
+    _logDuration(stage, start, details) {
+        const elapsed = this._now() - start;
+        let suffix = '';
+        if (details && typeof details === 'object') {
+            const entries = Object.entries(details).filter(([, value]) => value !== undefined && value !== null && value !== '');
+            if (entries.length > 0) {
+                suffix = ` ${entries.map(([key, value]) => `${key}=${value}`).join(' ')}`;
+            }
+        }
+        this._log(`${stage} ${elapsed.toFixed(2)} ms${suffix}`);
     }
 
     _layoutOptions(graph) {

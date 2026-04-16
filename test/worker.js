@@ -71,6 +71,28 @@ export class Target {
         this.emit('status', message);
     }
 
+    _now() {
+        return Number(process.hrtime.bigint()) / 1e6;
+    }
+
+    _log(message) {
+        if (globalThis.console && typeof globalThis.console.log === 'function') {
+            globalThis.console.log(message);
+        }
+    }
+
+    _logDuration(stage, start, details) {
+        const elapsed = this._now() - start;
+        let suffix = '';
+        if (details && typeof details === 'object') {
+            const entries = Object.entries(details).filter(([, value]) => value !== undefined && value !== null && value !== '');
+            if (entries.length > 0) {
+                suffix = ` ${entries.map(([key, value]) => `${key}=${value}`).join(' ')}`;
+            }
+        }
+        this._log(`${stage} ${elapsed.toFixed(2)} ms${suffix}`);
+    }
+
     async execute() {
         if (this.measures) {
             this.measures.set('name', this.name);
@@ -236,15 +258,22 @@ export class Target {
     }
 
     async load() {
+        const start = this._now();
         const target = path.resolve(this.folder, this.targets[0]);
         const identifier = path.basename(target);
+        this._log(`[load] start target=${identifier}`);
+        const statStart = this._now();
         const stat = await fs.stat(target);
+        this._logDuration('[load] stat', statStart, { type: stat.isFile() ? 'file' : 'directory' });
         let context = null;
         if (stat.isFile()) {
+            const contextStart = this._now();
             const stream = new node.FileStream(target, 0, stat.size, stat.mtimeMs);
             const dirname = path.dirname(target);
             context = new mock.Context(this.host, dirname, identifier, stream, new Map());
+            this._logDuration('[load] context', contextStart, { bytes: stat.size });
         } else if (stat.isDirectory()) {
+            const contextStart = this._now();
             const entries = new Map();
             const file = async (pathname) => {
                 const stat = await fs.stat(pathname);
@@ -267,14 +296,72 @@ export class Target {
             };
             await walk(target);
             context = new mock.Context(this.host, target, identifier, null, entries);
+            this._logDuration('[load] context', contextStart, { entries: entries.size });
         }
+        const openStart = this._now();
         const modelFactoryService = new view.ModelFactoryService(this.host);
         this.model = await modelFactoryService.open(context);
+        this._logDuration('[load] model-factory.open', openStart, {
+            modules: Array.isArray(this.model.modules) ? this.model.modules.length : 0,
+            functions: Array.isArray(this.model.functions) ? this.model.functions.length : 0,
+            format: this.model.format || ''
+        });
         this.view.model = this.model;
+        this._logDuration('[load] total', start);
     }
 
     async validate() {
+        const start = this._now();
         const model = this.model;
+        this._log(`[validate] start format=${model && model.format ? model.format : ''}`);
+        const countGraphNodes = (graph) => {
+            if (!graph || !Array.isArray(graph.nodes)) {
+                return 0;
+            }
+            let count = graph.nodes.length;
+            for (const node of graph.nodes) {
+                if (node && node.type && Array.isArray(node.type.nodes)) {
+                    count += countGraphNodes(node.type);
+                }
+                const attributes = node && Array.isArray(node.attributes) ? node.attributes : [];
+                for (const attribute of attributes) {
+                    const value = attribute ? attribute.value : null;
+                    if ((attribute.type === 'graph' || attribute.type === 'function') && value && Array.isArray(value.nodes)) {
+                        count += countGraphNodes(value);
+                    }
+                }
+            }
+            return count;
+        };
+        const validationNodeThreshold = 1000;
+        const topLevelNodes = (Array.isArray(model.modules) ? model.modules : []).reduce((sum, graph) => sum + countGraphNodes(graph), 0) +
+            (Array.isArray(model.functions) ? model.functions : []).reduce((sum, graph) => sum + countGraphNodes(graph), 0);
+        const requestedValidateMode = this.validateMode || 'full';
+        const lightMode = requestedValidateMode === 'light' || (requestedValidateMode === 'auto' && topLevelNodes >= validationNodeThreshold);
+        const effectiveValidateMode = lightMode ? 'light' : 'full';
+        this._log(`[validate] mode=${effectiveValidateMode} requested=${requestedValidateMode} top_level_nodes=${topLevelNodes} threshold=${validationNodeThreshold}`);
+        const stats = {
+            graphs: 0,
+            nodes: 0,
+            values: 0,
+            tensors: 0,
+            signatures: 0,
+            moduleMs: 0,
+            functionMs: 0,
+            breakdown: {
+                signaturesMs: 0,
+                nodeLoopMs: 0,
+                validateValueMs: 0,
+                validateTensorMs: 0,
+                tensorStringMs: 0,
+                tensorPythonMs: 0,
+                documentationMs: 0,
+                attributeMs: 0,
+                formatterMs: 0,
+                nodeSidebarMs: 0,
+                modelSidebarMs: 0
+            }
+        };
         if (!model.format || (this.format && this.format !== model.format)) {
             throw new Error(`Invalid model format '${model.format}'.`);
         }
@@ -319,9 +406,26 @@ export class Target {
             // continue
         }
         const validateGraph = async (graph) => {
+            const graphStart = this._now();
+            stats.graphs += 1;
+            const graphStats = {
+                signaturesMs: 0,
+                nodeLoopMs: 0,
+                validateValueMs: 0,
+                validateTensorMs: 0,
+                tensorStringMs: 0,
+                tensorPythonMs: 0,
+                documentationMs: 0,
+                attributeMs: 0,
+                formatterMs: 0,
+                nodeSidebarMs: 0,
+                modelSidebarMs: 0
+            };
             /* eslint-disable no-unused-expressions */
             const values = new Map();
             const validateTensor = async (value) => {
+                const validateTensorStart = this._now();
+                stats.tensors += 1;
                 value.type.toString();
                 if (value && value.peek && !value.peek()) {
                     await value.read();
@@ -339,8 +443,10 @@ export class Target {
                             throw new Error('Tensor data type is not defined.');
                         } else if (tensor.type && !tensor.type.shape) {
                             throw new Error('Tensor shape is not defined.');
-                        } else {
+                        } else if (!lightMode) {
+                            const tensorStringStart = this._now();
                             tensor.toString();
+                            graphStats.tensorStringMs += this._now() - tensorStringStart;
                             if (this.tags.has('validation')) {
                                 const size = tensor.type.shape.dimensions.reduce((a, b) => BigInt(a) * BigInt(b), 1n).toNumber();
                                 if (size < 8192 && tensor.type &&
@@ -348,6 +454,7 @@ export class Target {
                                     tensor.type.dataType !== 'string' &&
                                     tensor.type.dataType !== 'int128' &&
                                     tensor.type.dataType !== 'complex<int32>') {
+                                    const tensorPythonStart = this._now();
                                     let data_type = '?';
                                     switch (tensor.type.dataType) {
                                         case 'boolean': data_type = 'bool'; break;
@@ -401,14 +508,19 @@ export class Target {
                                     const dtype = new numpy.dtype(data_type);
                                     const array = numpy.asarray(tensor.value, dtype);
                                     numpy.save(bytes, array);
+                                    graphStats.tensorPythonMs += this._now() - tensorPythonStart;
                                 }
                             }
                         }
                     }
                 }
+                graphStats.validateTensorMs += this._now() - validateTensorStart;
             };
             const validateValue = async (value) => {
+                const validateValueStart = this._now();
+                stats.values += 1;
                 if (value === null) {
+                    graphStats.validateValueMs += this._now() - validateValueStart;
                     return;
                 }
                 value.name.toString();
@@ -436,8 +548,11 @@ export class Target {
                         throw new Error(`Duplicate value '${value.name}'.`);
                     }
                 }
+                graphStats.validateValueMs += this._now() - validateValueStart;
             };
             const signatures = Array.isArray(graph.signatures) ? graph.signatures : [graph];
+            stats.signatures += signatures.length;
+            const signaturesStart = this._now();
             for (const signature of signatures) {
                 for (const input of signature.inputs) {
                     input.name.toString();
@@ -458,9 +573,12 @@ export class Target {
                     }
                 }
             }
+            graphStats.signaturesMs += this._now() - signaturesStart;
             if (graph.metadata && (!Array.isArray(graph.metadata) || !graph.metadata.every((argument) => argument.name && argument.value !== undefined))) {
                 throw new Error("Invalid graph metadata.");
             }
+            stats.nodes += Array.isArray(graph.nodes) ? graph.nodes.length : 0;
+            const nodeLoopStart = this._now();
             for (const node of graph.nodes) {
                 const type = node.type;
                 if (!type || typeof type.name !== 'string') {
@@ -470,7 +588,11 @@ export class Target {
                     // eslint-disable-next-line no-await-in-loop
                     await validateGraph(type);
                 }
-                view.Documentation.open(type);
+                if (!lightMode) {
+                    const documentationStart = this._now();
+                    view.Documentation.open(type);
+                    graphStats.documentationMs += this._now() - documentationStart;
+                }
                 node.name.toString();
                 node.description;
                 if (node.metadata && (!Array.isArray(node.metadata) || !node.metadata.every((argument) => argument.name && argument.value !== undefined))) {
@@ -478,6 +600,7 @@ export class Target {
                 }
                 const attributes = node.attributes;
                 if (attributes) {
+                    const attributeStart = this._now();
                     for (const attribute of attributes) {
                         attribute.name.toString();
                         attribute.name.length;
@@ -489,14 +612,17 @@ export class Target {
                         } else if (type === 'tensor') {
                             // eslint-disable-next-line no-await-in-loop
                             await validateTensor(value);
-                        } else {
+                        } else if (!lightMode) {
+                            const formatterStart = this._now();
                             let text = new view.Formatter(attribute.value, attribute.type).toString();
                             if (text && text.length > 1000) {
                                 text = `${text.substring(0, 1000)}...`;
                             }
                             /* value = */ text.split('<');
+                            graphStats.formatterMs += this._now() - formatterStart;
                         }
                     }
+                    graphStats.attributeMs += this._now() - attributeStart;
                 }
                 const inputs = node.inputs;
                 if (Array.isArray(inputs)) {
@@ -508,10 +634,12 @@ export class Target {
                                 // eslint-disable-next-line no-await-in-loop
                                 await validateValue(value);
                             }
-                            if (this.tags.has('validation')) {
+                            if (!lightMode && this.tags.has('validation')) {
                                 if (input.value.length === 1 && input.value[0].initializer) {
+                                    const tensorSidebarStart = this._now();
                                     const sidebar = new view.TensorSidebar(this.view, input);
                                     sidebar.render();
+                                    graphStats.nodeSidebarMs += this._now() - tensorSidebarStart;
                                 }
                             }
                         }
@@ -536,12 +664,35 @@ export class Target {
                         chain.name.length;
                     }
                 }
-                const sidebar = new view.NodeSidebar(this.view, node);
-                sidebar.render();
+                if (!lightMode) {
+                    const nodeSidebarStart = this._now();
+                    const sidebar = new view.NodeSidebar(this.view, node);
+                    sidebar.render();
+                    graphStats.nodeSidebarMs += this._now() - nodeSidebarStart;
+                }
             }
-            const sidebar = new view.ModelSidebar(this.view, this.model, graph);
-            sidebar.render();
+            graphStats.nodeLoopMs += this._now() - nodeLoopStart;
+            if (!lightMode) {
+                const modelSidebarStart = this._now();
+                const sidebar = new view.ModelSidebar(this.view, this.model, graph);
+                sidebar.render();
+                graphStats.modelSidebarMs += this._now() - modelSidebarStart;
+            }
             /* eslint-enable no-unused-expressions */
+            for (const [key, value] of Object.entries(graphStats)) {
+                stats.breakdown[key] += value;
+            }
+            this._logDuration('[validate] graph', graphStart, {
+                name: graph && (graph.name || graph.identifier) ? (graph.name || graph.identifier) : '',
+                nodes: Array.isArray(graph.nodes) ? graph.nodes.length : 0,
+                signatures_ms: graphStats.signaturesMs.toFixed(2),
+                node_loop_ms: graphStats.nodeLoopMs.toFixed(2),
+                value_ms: graphStats.validateValueMs.toFixed(2),
+                tensor_ms: graphStats.validateTensorMs.toFixed(2),
+                tensor_python_ms: graphStats.tensorPythonMs.toFixed(2),
+                attr_ms: graphStats.attributeMs.toFixed(2),
+                sidebar_ms: (graphStats.nodeSidebarMs + graphStats.modelSidebarMs).toFixed(2)
+            });
         };
         const validateTarget = async (target) => {
             switch (target.type) {
@@ -551,14 +702,30 @@ export class Target {
             }
         };
         for (const module of model.modules) {
+            const moduleStart = this._now();
             // eslint-disable-next-line no-await-in-loop
             await validateTarget(module);
+            stats.moduleMs += this._now() - moduleStart;
         }
         const functions = model.functions || [];
         for (const func of functions) {
+            const functionStart = this._now();
             // eslint-disable-next-line no-await-in-loop
             await validateTarget(func);
+            stats.functionMs += this._now() - functionStart;
         }
+        this._logDuration('[validate] modules', start, {
+            ms: stats.moduleMs.toFixed(2),
+            functions_ms: stats.functionMs.toFixed(2)
+        });
+        this._logDuration('[validate] total', start, {
+            graphs: stats.graphs,
+            nodes: stats.nodes,
+            signatures: stats.signatures,
+            values: stats.values,
+            tensors: stats.tensors
+        });
+        this._log(`[validate] breakdown signatures_ms=${stats.breakdown.signaturesMs.toFixed(2)} node_loop_ms=${stats.breakdown.nodeLoopMs.toFixed(2)} value_ms=${stats.breakdown.validateValueMs.toFixed(2)} tensor_ms=${stats.breakdown.validateTensorMs.toFixed(2)} tensor_string_ms=${stats.breakdown.tensorStringMs.toFixed(2)} tensor_python_ms=${stats.breakdown.tensorPythonMs.toFixed(2)} documentation_ms=${stats.breakdown.documentationMs.toFixed(2)} attribute_ms=${stats.breakdown.attributeMs.toFixed(2)} formatter_ms=${stats.breakdown.formatterMs.toFixed(2)} node_sidebar_ms=${stats.breakdown.nodeSidebarMs.toFixed(2)} model_sidebar_ms=${stats.breakdown.modelSidebarMs.toFixed(2)}`);
     }
 
     async render() {

@@ -214,6 +214,7 @@ class Worker {
         this._worker = new worker_threads.Worker('./test/worker.js');
         for (let task = this._queue.pop(); task; task = this._queue.pop()) {
             task.measures = this._measures ? new Map() : null;
+            task.validateMode = this.validateMode || '';
             this._logger.update(this._identifier, null);
             // eslint-disable-next-line no-await-in-loop
             await new Promise((resolve) => {
@@ -271,13 +272,16 @@ class Worker {
 
 const main = async () => {
     try {
-        const args = { inputs: [], measure: false, profile: false, continue: false, serial: false };
+        const args = { inputs: [], measure: false, profile: false, continue: false, serial: false, validate: '' };
         if (process.argv.length > 2) {
             for (const arg of process.argv.slice(2)) {
                 switch (arg) {
                     case 'measure':  args.measure = true;  args.serial = true; break;
                     case 'profile':  args.profile = true;  args.serial = true; break;
                     case 'continue': args.continue = true; args.serial = true; break;
+                    case 'validate=full': args.validate = 'full'; break;
+                    case 'validate=light': args.validate = 'light'; break;
+                    case 'validate=auto': args.validate = 'auto'; break;
                     default: {
                         // eslint-disable-next-line no-await-in-loop
                         const exists = await access(arg);
@@ -328,6 +332,7 @@ const main = async () => {
                 const target = new worker.Target(item);
                 target.measures = measures ? new Map() : null;
                 target.serial = args.serial;
+                target.validateMode = args.validate;
                 target.on('status', (sender, message) => logger.update('', message));
                 try {
                     // eslint-disable-next-line no-await-in-loop
@@ -352,6 +357,9 @@ const main = async () => {
             const threads = Math.max(1, Math.min(10, Math.round(0.7 * os.cpus().length), queue.length));
             const identifiers = [...new Array(threads).keys()].map((value) => value.toString());
             const workers = identifiers.map((identifier) => new Worker(identifier, queue, logger, measures));
+            for (const worker of workers) {
+                worker.validateMode = args.validate;
+            }
             const promises = workers.map((worker) => worker.start());
             await Promise.all(promises);
         }
