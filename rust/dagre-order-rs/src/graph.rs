@@ -195,6 +195,12 @@ impl Graph {
         self.nodes.len()
     }
 
+    pub fn nodes(&self) -> Vec<String> {
+        let mut nodes: Vec<String> = self.nodes.keys().cloned().collect();
+        nodes.sort();
+        nodes
+    }
+
     pub fn is_compound(&self) -> bool {
         self.is_compound
     }

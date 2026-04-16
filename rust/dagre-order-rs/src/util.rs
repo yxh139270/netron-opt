@@ -1,6 +1,14 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
+pub fn edge_minlen(label: &serde_json::Value) -> i64 {
+    label
+        .get("minlen")
+        .and_then(serde_json::Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(1)
+}
+
 pub fn unique_id(prefix: &str, counter: &mut usize) -> String {
     let id = format!("{}{}", prefix, *counter);
     *counter += 1;

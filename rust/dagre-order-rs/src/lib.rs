@@ -1,12 +1,16 @@
 use wasm_bindgen::prelude::*;
 
 mod model;
+mod pipeline;
 mod result;
 pub mod graph;
 pub mod util;
 
+use graph::Graph;
 use model::LayoutInput;
-use result::{LayoutOutput, Meta, fallback_error_json};
+use pipeline::rank::run_rank_pipeline;
+use result::{EdgeOutput, LayoutOutput, Meta, NodeOutput, fallback_error_json};
+use util::edge_minlen;
 
 #[wasm_bindgen]
 pub fn layout(input_json: &str) -> String {
@@ -18,16 +22,33 @@ pub fn layout(input_json: &str) -> String {
 
 fn run_layout(input: LayoutInput) -> LayoutOutput {
     let _ = (input.layout.is_object(), input.state.is_object());
+    let mut graph = Graph::new(false, false);
     for node in &input.nodes {
-        let _ = (&node.id, &node.data);
+        graph.set_node(&node.id, node.data.clone());
     }
     for edge in &input.edges {
-        let _ = (&edge.v, &edge.w, &edge.data);
+        let minlen = edge_minlen(&edge.data);
+        graph.set_edge(&edge.v, &edge.w, serde_json::json!({ "minlen": minlen }));
     }
+    if let Err(error) = run_rank_pipeline(&mut graph) {
+        return LayoutOutput::error("rank_error", error.message());
+    }
+
     LayoutOutput {
         meta: Meta::ok(),
-        nodes: Vec::new(),
-        edges: Vec::new(),
+        nodes: input
+            .nodes
+            .into_iter()
+            .map(|node| NodeOutput { id: node.id })
+            .collect(),
+        edges: input
+            .edges
+            .into_iter()
+            .map(|edge| EdgeOutput {
+                v: edge.v,
+                w: edge.w,
+            })
+            .collect(),
         error: None,
     }
 }
