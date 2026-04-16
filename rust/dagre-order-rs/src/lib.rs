@@ -2,6 +2,8 @@ use wasm_bindgen::prelude::*;
 
 mod model;
 mod result;
+pub mod graph;
+pub mod util;
 
 use model::LayoutInput;
 use result::{LayoutOutput, Meta, fallback_error_json};
