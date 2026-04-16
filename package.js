@@ -261,6 +261,11 @@ const build = async (target) => {
             writeLine('build web');
             await rm('dist', 'web');
             await mkdir('dist', 'web');
+            if (process.env.NETRON_BUILD_DAGRE_RS === '1') {
+                await exec('bash tools/build-dagre-order-rs.sh');
+            } else {
+                writeLine('skip dagre-order-rs wasm (set NETRON_BUILD_DAGRE_RS=1 to enable)');
+            }
             writeLine('cp source/dir dist/dir');
             const source_dir = dirname('source');
             const dist_dir = dirname('dist', 'web');
