@@ -122,8 +122,9 @@ mycelium.Graph = class {
     }
 
     _nodeBounds(node) {
-        const width = Number.isFinite(node.width) ? node.width : 0;
-        const height = Number.isFinite(node.height) ? node.height : 0;
+        // 用布局分配的尺寸（如果有），因为那是节点在图中的实际占位
+        const width = Number.isFinite(node._layoutWidth) ? node._layoutWidth : (Number.isFinite(node.width) ? node.width : 0);
+        const height = Number.isFinite(node._layoutHeight) ? node._layoutHeight : (Number.isFinite(node.height) ? node.height : 0);
         const x = Number.isFinite(node.x) ? node.x : 0;
         const y = Number.isFinite(node.y) ? node.y : 0;
         return {
@@ -244,18 +245,18 @@ mycelium.Graph = class {
         node._refining = true;
         Promise.resolve().then(async () => {
             try {
-                node._lazyMeasure = false;
-                const document = this._document;
-                if (document && document.fonts && document.fonts.ready) {
-                    await document.fonts.ready;
-                }
-                const view = document && document.defaultView;
+                const view = this._document && this._document.defaultView;
                 if (view && typeof view.requestAnimationFrame === 'function') {
                     await new Promise((resolve) => view.requestAnimationFrame(resolve));
                 }
+                node._lazyMeasure = false;
                 await node.measure();
                 await node.layout();
                 node._refined = Number.isFinite(node.width) && node.width > 0 && Number.isFinite(node.height) && node.height > 0;
+                if (node._refined) {
+                    node._layoutWidth = node.width;
+                    node._layoutHeight = node.height;
+                }
             } catch {
                 node._refined = false;
                 const view = this._document && this._document.defaultView;
@@ -430,10 +431,43 @@ mycelium.Graph = class {
     _estimateNodeSize(label) {
         const text = label && (label.name || label.identifier || (label.type && label.type.name)) ?
             (label.name || label.identifier || label.type.name) : '';
-        const textWidth = Math.min(420, Math.max(120, 40 + String(text).length * 7));
+        const textWidth = Math.min(460, Math.max(120, 40 + String(text).length * 7));
+
+        const modelNode = label && label.value ? label.value : null;
+        let constCount = 0;
+        let nonConstInputCount = 0;
+        let outputCount = 0;
+        if (modelNode) {
+            if (Array.isArray(modelNode.inputs)) {
+                for (const argument of modelNode.inputs) {
+                    const values = argument && Array.isArray(argument.value) ? argument.value : [];
+                    for (const value of values) {
+                        if (!value) {
+                            continue;
+                        }
+                        if (value.initializer) {
+                            constCount++;
+                        } else {
+                            nonConstInputCount++;
+                        }
+                    }
+                }
+            }
+            if (Array.isArray(modelNode.outputs)) {
+                for (const argument of modelNode.outputs) {
+                    const values = argument && Array.isArray(argument.value) ? argument.value : [];
+                    outputCount += values.length;
+                }
+            }
+        }
+
         const hasBlocks = label && Array.isArray(label.blocks) && label.blocks.length > 0;
         const blockCount = hasBlocks ? label.blocks.length : 1;
-        const estimatedHeight = Math.max(44, 26 + blockCount * 18);
+
+        // Height model: title/header + rows. Rows include folded constants, regular
+        // inputs, and outputs to avoid under-estimating lazy nodes.
+        const rowCount = Math.max(1, constCount + nonConstInputCount + outputCount);
+        const estimatedHeight = Math.max(44, 26 + blockCount * 14 + rowCount * 16);
         return {
             width: textWidth,
             height: estimatedHeight
@@ -479,6 +513,11 @@ mycelium.Graph = class {
         let nodes = [];
         for (const node of this.nodes.values()) {
             node.label._lazyMeasure = !!estimateOnly;
+            if (estimateOnly) {
+                node.label._refined = false;
+            } else if (!this._lazyLeafNodes) {
+                node.label._refined = true;
+            }
             if (estimateOnly && node.label && typeof node.label.estimate === 'function') {
                 node.label.estimate();
             }
@@ -552,6 +591,9 @@ mycelium.Graph = class {
             const label = this.node(node.v).label;
             label.x = node.x;
             label.y = node.y;
+            // 保存布局分配的尺寸，精炼后真实尺寸可能更小
+            label._layoutWidth = node.width || 0;
+            label._layoutHeight = node.height || 0;
             if (this.children(node.v).length) {
                 label.width = node.width;
                 label.height = node.height;
@@ -620,7 +662,11 @@ mycelium.Graph = class {
                         this._refineVisibleNode(node);
                     }
                     this._mount(node.element);
-                    node.update();
+                    if (this._lazyLeafNodes && !node._refined) {
+                        node.element.style.opacity = '0';
+                    } else {
+                        node.update();
+                    }
                 } else {
                     this._unmount(node.element);
                 }
@@ -778,11 +824,11 @@ mycelium.Node = class {
             }
             return;
         }
+        this.element.setAttribute('transform', `translate(${this.x - (this.width / 2)},${this.y - (this.height / 2)})`);
+        this.border.setAttribute('d', mycelium.Node.roundedRect(0, 0, this.width, this.height, true, true, true, true));
         for (const block of this.blocks) {
             block.update();
         }
-        this.border.setAttribute('d', mycelium.Node.roundedRect(0, 0, this.width, this.height, true, true, true, true));
-        this.element.setAttribute('transform', `translate(${this.x - (this.width / 2)},${this.y - (this.height / 2)})`);
         this.element.style.removeProperty('opacity');
     }
 
@@ -1509,7 +1555,7 @@ mycelium.Argument = class {
         const textHeight = 14;
         this.width = xPadding + textWidth + xPadding;
         this.bottom = yPadding + textHeight + yPadding;
-        this.offset = 0;
+        this.offset = -(textHeight - 2);
         this.height = this.bottom;
         if (this.type === 'node') {
             const node = this.content;

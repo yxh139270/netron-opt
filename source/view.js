@@ -18,7 +18,7 @@ view.View = class {
             names: false,
             direction: 'vertical',
             mousewheel: 'scroll',
-            layoutEstimateMode: 'auto',
+            layoutEstimateMode: 'on',
             layoutEstimateThreshold: 1500,
             layoutDebug: false
         };
@@ -2404,7 +2404,7 @@ view.Graph = class extends grapher.Graph {
         }
     }
 
-    build(document, origin) {
+    build(document, origin, options) {
         if (!origin) {
             const element = document.getElementById('target');
             while (element.lastChild) {
@@ -2431,7 +2431,7 @@ view.Graph = class extends grapher.Graph {
         for (const value of this._values.values()) {
             value.build();
         }
-        super.build(document, origin);
+        super.build(document, origin, options);
     }
 
     async measure() {
