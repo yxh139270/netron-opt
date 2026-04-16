@@ -143,7 +143,9 @@ browser.Host = class {
             return Promise.resolve();
         };
         await age();
-        await consent();
+        consent().catch(() => {
+            // continue regardless of error
+        });
         await telemetry();
         await capabilities();
     }
@@ -221,6 +223,11 @@ browser.Host = class {
                 }
             }
         });
+        window.__netronReady = true;
+        if (window.__netronPendingOpen) {
+            window.__netronPendingOpen = false;
+            this.execute('open');
+        }
         this._view.show('welcome');
     }
 

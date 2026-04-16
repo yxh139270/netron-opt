@@ -2639,7 +2639,7 @@ view.Graph = class extends grapher.Graph {
         if (context.length > 0) {
             this.scrollTo(context, 'instant');
         } else if (elements && elements.length > 0) {
-            // Center view based on input elements
+            // 默认打开时优先从顶部开始显示，水平位置仍按输入节点居中
             const bounds = container.getBoundingClientRect();
             const xs = [];
             const ys = [];
@@ -2657,13 +2657,13 @@ view.Graph = class extends grapher.Graph {
                 x = xs.reduce((a, b) => a + b, 0) / xs.length;
             }
             const left = (container.scrollLeft + x - bounds.left) - (bounds.width / 2);
-            const top = (container.scrollTop + y - bounds.top) - (bounds.height / 2);
+            const top = 0;
             container.scrollTo({ left, top, behavior: 'auto' });
         } else {
             const canvasRect = canvas.getBoundingClientRect();
             const graphRect = container.getBoundingClientRect();
             const left = (container.scrollLeft + (canvasRect.width / 2) - graphRect.left) - (graphRect.width / 2);
-            const top = (container.scrollTop + (canvasRect.height / 2) - graphRect.top) - (graphRect.height / 2);
+            const top = 0;
             container.scrollTo({ left, top, behavior: 'auto' });
         }
         this._updateViewport();

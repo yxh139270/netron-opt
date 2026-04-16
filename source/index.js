@@ -93,6 +93,18 @@ window.addEventListener('error', function (event) {
 });
 
 window.addEventListener('load', function() {
+    if (window.document && window.document.body && window.document.body.classList) {
+        // 首屏优先：先展示 welcome（含 Open 按钮），初始化流程在后台继续。
+        window.document.body.classList.remove('spinner');
+    }
+    var openFileButton = window.document && window.document.getElementById ? window.document.getElementById('open-file-button') : null;
+    if (openFileButton) {
+        openFileButton.addEventListener('click', function() {
+            if (!window.__netronReady) {
+                window.__netronPendingOpen = true;
+            }
+        });
+    }
     if (typeof Symbol !== 'function' || typeof Symbol.asyncIterator !== 'symbol' ||
         typeof BigInt !== 'function' || typeof BigInt.asIntN !== 'function' || typeof BigInt.asUintN !== 'function' || typeof DataView.prototype.getBigInt64 !== 'function') {
         throw new Error('Please update your browser to use this application.');
