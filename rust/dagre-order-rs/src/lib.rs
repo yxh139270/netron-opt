@@ -8,6 +8,7 @@ pub mod util;
 
 use graph::Graph;
 use model::LayoutInput;
+use pipeline::order::order as run_order_pipeline;
 use pipeline::rank::run_rank_pipeline;
 use result::{EdgeOutput, LayoutOutput, Meta, NodeOutput, fallback_error_json};
 use util::edge_minlen;
@@ -33,6 +34,7 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
     if let Err(error) = run_rank_pipeline(&mut graph) {
         return LayoutOutput::error("rank_error", error.message());
     }
+    run_order_pipeline(&mut graph, &input.state);
 
     LayoutOutput {
         meta: Meta::ok(),
