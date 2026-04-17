@@ -221,6 +221,15 @@ impl Graph {
         self.edge_labels.get(edge_id)
     }
 
+    pub fn set_edge_label(&mut self, edge_id: &str, label: EdgeLabel) -> bool {
+        if self.edges.contains_key(edge_id) {
+            self.edge_labels.insert(edge_id.to_string(), label);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn edges(&self) -> Vec<EdgeRef> {
         let mut ids: Vec<String> = self.edges.keys().cloned().collect();
         ids.sort();

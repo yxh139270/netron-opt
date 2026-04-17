@@ -8,9 +8,11 @@ pub mod util;
 
 use graph::Graph;
 use model::LayoutInput;
+use pipeline::edge::run_edge_pipeline;
 use pipeline::order::order as run_order_pipeline;
+use pipeline::position::run_position_pipeline;
 use pipeline::rank::run_rank_pipeline;
-use result::{EdgeOutput, LayoutOutput, Meta, NodeOutput, fallback_error_json};
+use result::{EdgeOutput, LayoutOutput, Meta, NodeOutput, Point, fallback_error_json};
 use util::edge_minlen;
 
 #[wasm_bindgen]
@@ -23,36 +25,69 @@ pub fn layout(input_json: &str) -> String {
 
 fn run_layout(input: LayoutInput) -> LayoutOutput {
     let _ = (input.layout.is_object(), input.state.is_object());
-    let mut graph = Graph::new(false, false);
+    let mut graph = Graph::new(false, true);
     for node in &input.nodes {
         graph.set_node(&node.id, node.data.clone());
     }
+    let mut edge_ids = Vec::with_capacity(input.edges.len());
     for edge in &input.edges {
         let minlen = edge_minlen(&edge.data);
-        graph.set_edge(&edge.v, &edge.w, serde_json::json!({ "minlen": minlen }));
+        let edge_id = graph.set_edge(&edge.v, &edge.w, serde_json::json!({ "minlen": minlen }));
+        edge_ids.push(edge_id);
     }
     if let Err(error) = run_rank_pipeline(&mut graph) {
         return LayoutOutput::error("rank_error", error.message());
     }
     run_order_pipeline(&mut graph, &input.state);
+    run_position_pipeline(&mut graph);
+    run_edge_pipeline(&mut graph);
 
     LayoutOutput {
         meta: Meta::ok(),
         nodes: input
             .nodes
             .into_iter()
-            .map(|node| NodeOutput { id: node.id })
+            .map(|node| {
+                let (x, y) = node_xy(&graph, &node.id);
+                NodeOutput { id: node.id, x, y }
+            })
             .collect(),
         edges: input
             .edges
             .into_iter()
-            .map(|edge| EdgeOutput {
-                v: edge.v,
-                w: edge.w,
+            .zip(edge_ids)
+            .map(|(edge, edge_id)| {
+                let points = edge_points(&graph, &edge_id);
+                EdgeOutput {
+                    v: edge.v,
+                    w: edge.w,
+                    points,
+                }
             })
             .collect(),
         error: None,
     }
+}
+
+fn node_xy(graph: &Graph, id: &str) -> (Option<f64>, Option<f64>) {
+    let Some(label) = graph.node_label(id) else {
+        return (None, None);
+    };
+    (
+        label.get("x").and_then(serde_json::Value::as_f64),
+        label.get("y").and_then(serde_json::Value::as_f64),
+    )
+}
+
+fn edge_points(graph: &Graph, edge_id: &str) -> Vec<Point> {
+    let Some(label) = graph.edge_label(edge_id) else {
+        return Vec::new();
+    };
+    label
+        .get("points")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<Point>>(value).ok())
+        .unwrap_or_default()
 }
 
 fn serialize_success(output: LayoutOutput) -> String {

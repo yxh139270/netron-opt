@@ -68,10 +68,21 @@ pub struct LayoutError {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NodeOutput {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EdgeOutput {
     pub v: String,
     pub w: String,
+    pub points: Vec<Point>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Point {
+    pub x: f64,
+    pub y: f64,
 }
