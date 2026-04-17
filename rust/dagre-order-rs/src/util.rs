@@ -19,6 +19,10 @@ pub fn edge_minlen(label: &serde_json::Value) -> i64 {
         .unwrap_or(1)
 }
 
+pub fn edge_minlen_with_label_spacing(label: &serde_json::Value) -> i64 {
+    edge_minlen(label).saturating_mul(2)
+}
+
 pub fn unique_id(prefix: &str, counter: &mut usize) -> String {
     let id = format!("{}{}", prefix, *counter);
     *counter += 1;

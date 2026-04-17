@@ -1,3 +1,4 @@
+pub mod border;
 pub mod edge;
 pub mod normalize;
 pub mod order;

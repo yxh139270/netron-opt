@@ -4,6 +4,8 @@ pub struct LayoutOutput {
     pub nodes: Vec<NodeOutput>,
     pub edges: Vec<EdgeOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<LayoutError>,
 }
 
@@ -13,6 +15,7 @@ impl LayoutOutput {
             meta: Meta::error(),
             nodes: Vec::new(),
             edges: Vec::new(),
+            debug: None,
             error: Some(LayoutError {
                 code: code.to_string(),
                 message: message.to_string(),

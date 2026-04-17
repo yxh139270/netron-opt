@@ -213,6 +213,58 @@ impl Graph {
         self.edges.len()
     }
 
+    pub fn remove_edge(&mut self, edge_id: &str) -> bool {
+        let Some((v, w)) = self.edges.remove(edge_id) else {
+            return false;
+        };
+        self.edge_labels.remove(edge_id);
+        if let Some(out) = self.out_edges.get_mut(&v) {
+            out.retain(|id| id != edge_id);
+        }
+        if let Some(input) = self.in_edges.get_mut(&w) {
+            input.retain(|id| id != edge_id);
+        }
+        true
+    }
+
+    pub fn remove_node(&mut self, id: &str) -> bool {
+        if !self.nodes.contains_key(id) {
+            return false;
+        }
+
+        let mut incident = Vec::new();
+        if let Some(edges) = self.out_edges.get(id) {
+            incident.extend(edges.iter().cloned());
+        }
+        if let Some(edges) = self.in_edges.get(id) {
+            incident.extend(edges.iter().cloned());
+        }
+        incident.sort();
+        incident.dedup();
+        for edge_id in incident {
+            let _ = self.remove_edge(&edge_id);
+        }
+
+        self.out_edges.remove(id);
+        self.in_edges.remove(id);
+
+        if self.is_compound {
+            if let Some(parent) = self.parents.remove(id) {
+                if let Some(children) = self.children.get_mut(&parent) {
+                    children.retain(|child| child != id);
+                }
+            }
+            if let Some(children) = self.children.remove(id) {
+                for child in children {
+                    self.set_parent(&child, None);
+                }
+            }
+        }
+
+        self.nodes.remove(id);
+        true
+    }
+
     pub fn node_label(&self, id: &str) -> Option<&NodeLabel> {
         self.nodes.get(id)
     }
@@ -352,5 +404,17 @@ mod tests {
         assert_eq!(edge_id, "a->b#edge-1".to_string());
         assert_eq!(graph.edge_count(), 1);
         assert_eq!(graph.successors("a"), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn remove_node_drops_incident_edges() {
+        let mut graph = Graph::new(false, false);
+        graph.set_edge("a", "b", serde_json::json!({}));
+        graph.set_edge("b", "c", serde_json::json!({}));
+
+        assert!(graph.remove_node("b"));
+        assert_eq!(graph.edge_count(), 0);
+        assert_eq!(graph.successors("a"), Vec::<String>::new());
+        assert_eq!(graph.predecessors("c"), Vec::<String>::new());
     }
 }
