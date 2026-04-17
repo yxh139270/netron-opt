@@ -1,0 +1,36 @@
+{
+  "fixtures": [
+    {
+      "name": "chain-3",
+      "nodes": [
+        { "v": "n0", "width": 80, "height": 36 },
+        { "v": "n1", "width": 100, "height": 42 },
+        { "v": "n2", "width": 90, "height": 36 }
+      ],
+      "edges": [
+        { "v": "n0", "w": "n1", "minlen": 1, "weight": 1, "width": 0, "height": 0, "labeloffset": 10, "labelpos": "r" },
+        { "v": "n1", "w": "n2", "minlen": 1, "weight": 1, "width": 0, "height": 0, "labeloffset": 10, "labelpos": "r" }
+      ],
+      "layout": { "rankdir": "TB", "nodesep": 20, "ranksep": 20 },
+      "state": {}
+    },
+    {
+      "name": "diamond-with-cluster",
+      "nodes": [
+        { "v": "cluster", "width": 10, "height": 10 },
+        { "v": "a", "width": 96, "height": 36, "parent": "cluster" },
+        { "v": "b", "width": 112, "height": 42, "parent": "cluster" },
+        { "v": "c", "width": 112, "height": 42, "parent": "cluster" },
+        { "v": "d", "width": 96, "height": 36 }
+      ],
+      "edges": [
+        { "v": "a", "w": "b", "minlen": 1, "weight": 1, "width": 0, "height": 0, "labeloffset": 10, "labelpos": "r" },
+        { "v": "a", "w": "c", "minlen": 1, "weight": 1, "width": 0, "height": 0, "labeloffset": 10, "labelpos": "r" },
+        { "v": "b", "w": "d", "minlen": 1, "weight": 1, "width": 0, "height": 0, "labeloffset": 10, "labelpos": "r" },
+        { "v": "c", "w": "d", "minlen": 1, "weight": 1, "width": 0, "height": 0, "labeloffset": 10, "labelpos": "r" }
+      ],
+      "layout": { "rankdir": "TB", "nodesep": 20, "ranksep": 20 },
+      "state": {}
+    }
+  ]
+}

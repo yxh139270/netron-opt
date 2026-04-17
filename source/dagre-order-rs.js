@@ -1,4 +1,5 @@
 let _modulePromise = null;
+let _moduleError = null;
 
 const _isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);
 
@@ -16,6 +17,9 @@ const _moduleCandidates = () => {
 };
 
 const _loadModule = async () => {
+    if (_moduleError) {
+        throw _moduleError;
+    }
     if (!_modulePromise) {
         _modulePromise = (async () => {
             let lastError = null;
@@ -36,7 +40,8 @@ const _loadModule = async () => {
             }
             throw new Error(`Unable to load dagre-order-rs wasm module. ${lastError ? lastError.message : ''}`.trim());
         })();
-        _modulePromise.catch(() => {
+        _modulePromise.catch((error) => {
+            _moduleError = error;
             _modulePromise = null;
         });
     }
