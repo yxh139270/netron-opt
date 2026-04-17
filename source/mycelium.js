@@ -653,7 +653,7 @@ mycelium.Graph = class {
                 }
             }
         };
-        const orderEngine = String((this.options && this.options.orderEngine) || layout.orderEngine || 'js').toLowerCase();
+        const orderEngine = String((this.options && this.options.orderEngine) || layout.orderEngine || 'rust-proto').toLowerCase();
         if (worker) {
             const message = await worker.request({ type: 'dagre.layout', nodes, edges, layout, state }, 2500, 'This large graph layout might take a very long time to complete.');
             if (message.type === 'cancel' || message.type === 'terminate') {
@@ -677,6 +677,9 @@ mycelium.Graph = class {
         } else {
             const dagre = await import('./dagre-order.js');
             dagre.layout(nodes, edges, layout, state);
+        }
+        if (orderEngine === 'rust-proto' && state.log && globalThis.console && typeof globalThis.console.log === 'function') {
+            globalThis.console.log(`[dagre-order-rs] stage_ms ${state.log}`);
         }
         state.log = '';
         let minX = Infinity;

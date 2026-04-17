@@ -1,4 +1,21 @@
 use crate::graph::Graph;
+use crate::util::now_ms;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OrderMetrics {
+    pub init_ms: f64,
+    pub layer_graph_ms: f64,
+    pub reorder_rank_ms: f64,
+    pub cross_count_ms: f64,
+}
+
+fn order_mode(layout: &serde_json::Value) -> String {
+    layout
+        .get("order")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("fast")
+        .to_ascii_lowercase()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Relationship {
@@ -82,16 +99,34 @@ pub fn init_order(g: &mut Graph) -> Vec<Vec<String>> {
 }
 
 pub fn order(g: &mut Graph, _state: &serde_json::Value) {
+    let _ = order_with_metrics(g, _state);
+}
+
+pub fn order_with_metrics(g: &mut Graph, layout: &serde_json::Value) -> OrderMetrics {
+    let mut metrics = OrderMetrics::default();
+
+    if order_mode(layout) == "fast" {
+        let init_start = now_ms();
+        let layering = init_order_dfs(g);
+        assign_order(g, &layering);
+        metrics.init_ms += now_ms() - init_start;
+        return metrics;
+    }
+
+    let init_start = now_ms();
     let mut layering = init_order(g);
     assign_order(g, &layering);
+    metrics.init_ms += now_ms() - init_start;
 
     let max_rank = layering.len().saturating_sub(1) as i64;
     if max_rank <= 0 {
-        return;
+        return metrics;
     }
 
     let mut best_layering = layering.clone();
+    let cross_start = now_ms();
     let mut best_crossings = cross_count(g, &best_layering);
+    metrics.cross_count_ms += now_ms() - cross_start;
     let mut rounds_since_best = 0;
 
     for iter in 0..16 {
@@ -100,18 +135,33 @@ pub fn order(g: &mut Graph, _state: &serde_json::Value) {
 
         if downward {
             for rank in 1..=max_rank {
+                let layer_graph_start = now_ms();
                 let layer_graph = build_layer_graph(g, rank, Relationship::In);
+                metrics.layer_graph_ms += now_ms() - layer_graph_start;
+
+                let reorder_start = now_ms();
                 reorder_rank(g, rank, &layer_graph, bias_right);
+                metrics.reorder_rank_ms += now_ms() - reorder_start;
             }
         } else {
             for rank in (0..max_rank).rev() {
+                let layer_graph_start = now_ms();
                 let layer_graph = build_layer_graph(g, rank, Relationship::Out);
+                metrics.layer_graph_ms += now_ms() - layer_graph_start;
+
+                let reorder_start = now_ms();
                 reorder_rank(g, rank, &layer_graph, bias_right);
+                metrics.reorder_rank_ms += now_ms() - reorder_start;
             }
         }
 
+        let layer_matrix_start = now_ms();
         layering = build_layer_matrix(g);
+        metrics.init_ms += now_ms() - layer_matrix_start;
+
+        let cross_start = now_ms();
         let crossings = cross_count(g, &layering);
+        metrics.cross_count_ms += now_ms() - cross_start;
         if crossings < best_crossings {
             best_crossings = crossings;
             best_layering = layering.clone();
@@ -124,7 +174,74 @@ pub fn order(g: &mut Graph, _state: &serde_json::Value) {
         }
     }
 
+    let assign_start = now_ms();
     assign_order(g, &best_layering);
+    metrics.init_ms += now_ms() - assign_start;
+
+    metrics
+}
+
+fn init_order_dfs(g: &Graph) -> Vec<Vec<String>> {
+    let nodes = g.nodes();
+    let mut max_rank = -1_i64;
+    for node in &nodes {
+        if let Some(rank) = node_rank(g, node) {
+            max_rank = max_rank.max(rank);
+        }
+    }
+    if max_rank < 0 {
+        return Vec::new();
+    }
+
+    let mut layers = vec![Vec::new(); (max_rank + 1) as usize];
+    let mut visited = std::collections::HashSet::new();
+    let mut seen_in_layer: Vec<std::collections::HashSet<String>> =
+        vec![std::collections::HashSet::new(); layers.len()];
+
+    let mut push_layer = |v: &str| {
+        let Some(rank) = node_rank(g, v) else {
+            return;
+        };
+        let rank_index = rank as usize;
+        if seen_in_layer[rank_index].insert(v.to_string()) {
+            layers[rank_index].push(v.to_string());
+        }
+    };
+
+    fn dfs_visit(
+        g: &Graph,
+        v: &str,
+        visited: &mut std::collections::HashSet<String>,
+        push_layer: &mut impl FnMut(&str),
+    ) {
+        if visited.contains(v) {
+            push_layer(v);
+            return;
+        }
+        visited.insert(v.to_string());
+        push_layer(v);
+        for w in g.successors(v) {
+            dfs_visit(g, &w, visited, push_layer);
+        }
+    }
+
+    let mut sources = nodes
+        .iter()
+        .filter(|node| g.predecessors(node).is_empty())
+        .filter_map(|node| node_rank(g, node).map(|rank| (node.clone(), rank)))
+        .collect::<Vec<_>>();
+    sources.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+
+    for (source, _) in sources {
+        dfs_visit(g, &source, &mut visited, &mut push_layer);
+    }
+    for node in &nodes {
+        if !visited.contains(node) {
+            dfs_visit(g, node, &mut visited, &mut push_layer);
+        }
+    }
+
+    layers
 }
 
 fn add_or_accumulate_edge(g: &mut Graph, v: &str, w: &str, weight: f64) {
@@ -395,7 +512,7 @@ fn fenwick_sum(bit: &[f64], mut index: usize) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Relationship, build_layer_graph, init_order, order};
+    use super::{Relationship, build_layer_graph, init_order, order, order_with_metrics};
     use crate::graph::Graph;
 
     fn edge_ids(g: &Graph) -> Vec<String> {
@@ -462,5 +579,21 @@ mod tests {
         ];
         let crossings = super::cross_count(&graph, &layering);
         assert!(crossings > 0.0);
+    }
+
+    #[test]
+    fn fast_mode_skips_sweep_stage_metrics() {
+        let mut graph = Graph::new(false, false);
+        graph.set_node("a", serde_json::json!({"rank": 0}));
+        graph.set_node("b", serde_json::json!({"rank": 0}));
+        graph.set_node("c", serde_json::json!({"rank": 1}));
+        graph.set_node("d", serde_json::json!({"rank": 1}));
+        graph.set_edge("a", "d", serde_json::json!({"weight": 1}));
+        graph.set_edge("b", "c", serde_json::json!({"weight": 1}));
+
+        let metrics = order_with_metrics(&mut graph, &serde_json::json!({"order": "fast"}));
+        assert_eq!(metrics.layer_graph_ms, 0.0);
+        assert_eq!(metrics.reorder_rank_ms, 0.0);
+        assert_eq!(metrics.cross_count_ms, 0.0);
     }
 }
