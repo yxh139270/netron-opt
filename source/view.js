@@ -18,6 +18,7 @@ view.View = class {
             names: false,
             direction: 'vertical',
             mousewheel: 'scroll',
+            layoutEngine: 'dagre-order',
             layoutEstimateMode: 'on',
             layoutEstimateThreshold: 1500,
             layoutDebug: false
@@ -181,6 +182,14 @@ view.View = class {
                         return `Layout &Estimate: ${mode}`;
                     },
                     execute: () => this.toggle('layoutEstimateMode'),
+                    enabled: () => this.activeTarget
+                });
+                view.add({
+                    label: () => {
+                        const names = { 'dagre': 'Dagre', 'dagre-order': 'Dagre Order', 'dagre-fast': 'Dagre Fast' };
+                        return `Layout &Engine: ${names[this.options.layoutEngine] || this.options.layoutEngine}`;
+                    },
+                    execute: () => this.toggle('layoutEngine'),
                     enabled: () => this.activeTarget
                 });
                 view.add({
@@ -371,6 +380,10 @@ view.View = class {
                 break;
             case 'layoutEstimateMode':
                 this._options.layoutEstimateMode = this._options.layoutEstimateMode === 'auto' ? 'on' : this._options.layoutEstimateMode === 'on' ? 'off' : 'auto';
+                this._reload();
+                break;
+            case 'layoutEngine':
+                this._options.layoutEngine = this._options.layoutEngine === 'dagre-order' ? 'dagre-fast' : this._options.layoutEngine === 'dagre-fast' ? 'dagre' : 'dagre-order';
                 this._reload();
                 break;
             case 'mousewheel':
