@@ -10,8 +10,9 @@ use graph::Graph;
 use model::LayoutInput;
 use pipeline::border::{add_border_segments, is_border_dummy, remove_border_nodes};
 use pipeline::edge::run_edge_pipeline;
+use pipeline::normalize::{denormalize_long_edges, normalize_long_edges};
 use pipeline::order::order_with_metrics as run_order_pipeline;
-use pipeline::position::run_position_pipeline;
+use pipeline::position::{run_position_pipeline, update_compound_bounds};
 use pipeline::rank::run_rank_pipeline;
 use result::{EdgeOutput, LayoutOutput, Meta, NodeOutput, Point, fallback_error_json};
 use util::{edge_minlen_with_label_spacing, now_ms};
@@ -27,9 +28,13 @@ pub fn layout(input_json: &str) -> String {
 fn run_layout(input: LayoutInput) -> LayoutOutput {
     let total_start = now_ms();
     let mut stage_ms = serde_json::Map::new();
-
     let graph_build_start = now_ms();
     let effective_layout = apply_make_space_for_edge_labels(&input.layout);
+    let debug_stages = effective_layout
+        .get("debugStages")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let mut stage_snapshots = Vec::new();
     let _ = (effective_layout.is_object(), input.state.is_object());
     let mut graph = Graph::new(true, true);
     for node in &input.nodes {
@@ -58,6 +63,9 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         "graph_build_ms".to_string(),
         serde_json::json!(now_ms() - graph_build_start),
     );
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "graph-built"));
+    }
 
     let rank_start = now_ms();
     let rank_result = run_rank_pipeline(&mut graph);
@@ -71,8 +79,19 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         output.meta.stage_ms = serde_json::Value::Object(stage_ms);
         return output;
     }
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "rank"));
+    }
+
+    let dummy_chains = normalize_long_edges(&mut graph);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "normalize"));
+    }
 
     add_border_segments(&mut graph);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "add_border_segments"));
+    }
 
     let order_start = now_ms();
     let order_metrics = run_order_pipeline(&mut graph, &effective_layout);
@@ -93,6 +112,9 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         "order_cross_count_ms".to_string(),
         serde_json::json!(order_metrics.cross_count_ms),
     );
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "order"));
+    }
 
     let position_start = now_ms();
     run_position_pipeline(&mut graph, &effective_layout);
@@ -100,6 +122,9 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         "position_ms".to_string(),
         serde_json::json!(now_ms() - position_start),
     );
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "position"));
+    }
 
     let debug_border_pre_remove = if debug_enabled(&effective_layout) {
         Some(collect_border_dummy_info(&graph))
@@ -108,8 +133,28 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
     };
 
     remove_border_nodes(&mut graph);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "remove_border_nodes"));
+    }
+
+    denormalize_long_edges(&mut graph, dummy_chains);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "denormalize"));
+    }
+
+    update_compound_bounds(&mut graph);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "update_compound_bounds"));
+    }
+
     apply_compound_parent_spacing(&mut graph, &effective_layout);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "apply_compound_parent_spacing"));
+    }
     align_multi_input_nodes_to_predecessor_center(&mut graph);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "align_multi_input_nodes_to_predecessor_center"));
+    }
 
     let edge_start = now_ms();
     run_edge_pipeline(&mut graph);
@@ -117,10 +162,16 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         "edge_ms".to_string(),
         serde_json::json!(now_ms() - edge_start),
     );
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "edge"));
+    }
 
     let collect_output_start = now_ms();
 
     translate_graph(&mut graph);
+    if debug_stages {
+        stage_snapshots.push(collect_stage_snapshot(&graph, "translate_graph"));
+    }
 
     let nodes = input
         .nodes
@@ -166,7 +217,15 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         nodes,
         edges,
         debug: if debug_enabled(&effective_layout) {
-            Some(collect_debug_info(&graph, debug_border_pre_remove))
+            Some(collect_debug_info(
+                &graph,
+                debug_border_pre_remove,
+                if debug_stages {
+                    Some(serde_json::Value::Array(stage_snapshots))
+                } else {
+                    None
+                },
+            ))
         } else {
             None
         },
@@ -179,9 +238,17 @@ fn debug_enabled(layout: &serde_json::Value) -> bool {
         .get("debugBorder")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
+        || layout
+            .get("debugStages")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
 }
 
-fn collect_debug_info(graph: &Graph, border_pre_remove: Option<serde_json::Value>) -> serde_json::Value {
+fn collect_debug_info(
+    graph: &Graph,
+    border_pre_remove: Option<serde_json::Value>,
+    stage_snapshots: Option<serde_json::Value>,
+) -> serde_json::Value {
     let nodes = graph
         .nodes()
         .into_iter()
@@ -221,7 +288,52 @@ fn collect_debug_info(graph: &Graph, border_pre_remove: Option<serde_json::Value
         })
         .collect::<Vec<_>>();
 
-    serde_json::json!({ "nodes": nodes, "borderDummyPreRemove": border_pre_remove })
+    serde_json::json!({
+        "nodes": nodes,
+        "borderDummyPreRemove": border_pre_remove,
+        "stageSnapshots": stage_snapshots
+    })
+}
+
+fn collect_stage_snapshot(graph: &Graph, stage: &str) -> serde_json::Value {
+    let nodes = graph
+        .nodes()
+        .into_iter()
+        .filter_map(|id| {
+            let label = graph.node_label(&id)?;
+            Some(serde_json::json!({
+                "id": id,
+                "x": label.get("x").and_then(serde_json::Value::as_f64),
+                "y": label.get("y").and_then(serde_json::Value::as_f64),
+                "rank": label.get("rank").and_then(serde_json::Value::as_i64),
+                "order": label.get("order").and_then(serde_json::Value::as_i64),
+                "dummy": label.get("dummy").and_then(serde_json::Value::as_str),
+                "borderType": label.get("borderType").and_then(serde_json::Value::as_str),
+                "parent": graph.parent(&id)
+            }))
+        })
+        .collect::<Vec<_>>();
+    let edges = graph
+        .edges()
+        .into_iter()
+        .map(|edge| {
+            let label = graph.edge_label(&edge.id);
+            let points_len = label
+                .and_then(|value| value.get("points"))
+                .and_then(serde_json::Value::as_array)
+                .map(|array| array.len())
+                .unwrap_or(0);
+            serde_json::json!({
+                "v": edge.v,
+                "w": edge.w,
+                "minlen": label
+                    .and_then(|value| value.get("minlen"))
+                    .and_then(serde_json::Value::as_i64),
+                "pointsLength": points_len
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({ "stage": stage, "nodes": nodes, "edges": edges })
 }
 
 fn collect_border_dummy_info(graph: &Graph) -> serde_json::Value {
@@ -676,6 +788,55 @@ mod tests {
             .expect("a.y");
 
         assert!(a_y >= 27.0, "expected a.y >= 27 with compound spacing, got {a_y}");
+    }
+
+    #[test]
+    fn compound_unconstrained_sibling_keeps_same_rank_band_as_constrained_sibling() {
+        let output = layout(
+            r#"{
+                "nodes":[
+                    {"id":"cluster","data":{"v":"cluster","width":10,"height":10}},
+                    {"id":"a","data":{"v":"a","width":80,"height":30,"parent":"cluster"}},
+                    {"id":"b","data":{"v":"b","width":80,"height":30,"parent":"cluster"}},
+                    {"id":"c","data":{"v":"c","width":80,"height":30,"parent":"cluster"}},
+                    {"id":"d","data":{"v":"d","width":80,"height":30}},
+                    {"id":"e","data":{"v":"e","width":80,"height":30}},
+                    {"id":"f","data":{"v":"f","width":80,"height":30}}
+                ],
+                "edges":[
+                    {"v":"a","w":"b","data":{"minlen":1}}
+                ],
+                "layout":{"rankdir":"TB","nodesep":20,"ranksep":20},
+                "state":{}
+            }"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid json");
+
+        let node_y = |id: &str| {
+            parsed
+                .get("nodes")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|nodes| {
+                    nodes.iter().find(|node| {
+                        node.get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .map(|value| value == id)
+                            .unwrap_or(false)
+                    })
+                })
+                .and_then(|node| node.get("y"))
+                .and_then(serde_json::Value::as_f64)
+                .expect("node y")
+        };
+
+        let b_y = node_y("b");
+        let c_y = node_y("c");
+
+        let cluster_y = node_y("cluster");
+        let d_y = node_y("d");
+
+        assert!((b_y - c_y).abs() <= 1e-6, "expected b/c in same rank band, got b={b_y}, c={c_y}");
+        assert!(d_y < cluster_y, "expected external node d above cluster center, got d={d_y}, cluster={cluster_y}");
     }
 
     #[test]

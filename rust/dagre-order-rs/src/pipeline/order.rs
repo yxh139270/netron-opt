@@ -182,7 +182,7 @@ pub fn order_with_metrics(g: &mut Graph, layout: &serde_json::Value) -> OrderMet
 }
 
 fn init_order_dfs(g: &Graph) -> Vec<Vec<String>> {
-    let nodes = g.nodes();
+    let nodes = g.nodes_insertion_order();
     let mut max_rank = -1_i64;
     for node in &nodes {
         if let Some(rank) = node_rank(g, node) {
@@ -220,7 +220,7 @@ fn init_order_dfs(g: &Graph) -> Vec<Vec<String>> {
         }
         visited.insert(v.to_string());
         push_layer(v);
-        for w in g.successors(v) {
+        for w in g.successors_insertion_order(v) {
             dfs_visit(g, &w, visited, push_layer);
         }
     }
@@ -230,7 +230,7 @@ fn init_order_dfs(g: &Graph) -> Vec<Vec<String>> {
         .filter(|node| g.predecessors(node).is_empty())
         .filter_map(|node| node_rank(g, node).map(|rank| (node.clone(), rank)))
         .collect::<Vec<_>>();
-    sources.sort_by(|left, right| left.1.cmp(&right.1).then(left.0.cmp(&right.0)));
+    sources.sort_by(|left, right| left.1.cmp(&right.1));
 
     for (source, _) in sources {
         dfs_visit(g, &source, &mut visited, &mut push_layer);
@@ -397,7 +397,7 @@ fn barycenter_for_node(layer_graph: &Graph, node: &str, original: &Graph) -> Opt
 
 fn build_layer_matrix(g: &Graph) -> Vec<Vec<String>> {
     let mut max_rank = -1_i64;
-    for node in g.nodes() {
+    for node in g.nodes_insertion_order() {
         if let Some(rank) = node_rank(g, &node) {
             max_rank = max_rank.max(rank);
         }
@@ -407,7 +407,7 @@ fn build_layer_matrix(g: &Graph) -> Vec<Vec<String>> {
     }
 
     let mut layers = vec![Vec::new(); (max_rank + 1) as usize];
-    for node in g.nodes() {
+    for node in g.nodes_insertion_order() {
         if let Some(rank) = node_rank(g, &node) {
             layers[rank as usize].push(node);
         }
@@ -427,7 +427,7 @@ fn cross_count(g: &Graph, layering: &[Vec<String>]) -> f64 {
         }
     }
 
-    let edges = g.edges();
+    let edges = g.edges_insertion_order();
     for layer_index in 1..layering.len() {
         let boundary = (layer_index - 1) as i64;
         let mut segments = Vec::new();
@@ -595,5 +595,66 @@ mod tests {
         assert_eq!(metrics.layer_graph_ms, 0.0);
         assert_eq!(metrics.reorder_rank_ms, 0.0);
         assert_eq!(metrics.cross_count_ms, 0.0);
+    }
+
+    #[test]
+    fn fast_mode_dfs_respects_successor_insertion_order() {
+        let mut graph = Graph::new(false, false);
+        graph.set_node("s", serde_json::json!({"rank": 0}));
+        graph.set_node("x", serde_json::json!({"rank": 2}));
+        graph.set_node("y", serde_json::json!({"rank": 2}));
+
+        // Intentionally insert y before x.
+        graph.set_edge("s", "y", serde_json::json!({"minlen": 2, "weight": 1}));
+        graph.set_edge("s", "x", serde_json::json!({"minlen": 2, "weight": 1}));
+
+        let metrics = order_with_metrics(&mut graph, &serde_json::json!({"order": "fast"}));
+        assert!(metrics.init_ms >= 0.0);
+
+        let x_order = graph
+            .node_label("x")
+            .and_then(|label| label.get("order"))
+            .and_then(serde_json::Value::as_u64)
+            .expect("x order");
+        let y_order = graph
+            .node_label("y")
+            .and_then(|label| label.get("order"))
+            .and_then(serde_json::Value::as_u64)
+            .expect("y order");
+
+        assert!(y_order < x_order, "expected insertion-order DFS to place y before x");
+    }
+
+    #[test]
+    fn fast_mode_dfs_preserves_source_insertion_order_with_numeric_ids() {
+        let mut graph = Graph::new(false, false);
+        graph.set_node("0", serde_json::json!({"rank": 0}));
+        graph.set_node("1", serde_json::json!({"rank": 0}));
+        graph.set_node("2", serde_json::json!({"rank": 0}));
+        graph.set_node("10", serde_json::json!({"rank": 0}));
+        graph.set_node("a", serde_json::json!({"rank": 2}));
+        graph.set_node("b", serde_json::json!({"rank": 2}));
+        graph.set_node("c", serde_json::json!({"rank": 2}));
+        graph.set_node("d", serde_json::json!({"rank": 2}));
+
+        graph.set_edge("0", "a", serde_json::json!({"minlen": 2, "weight": 1}));
+        graph.set_edge("1", "b", serde_json::json!({"minlen": 2, "weight": 1}));
+        graph.set_edge("2", "c", serde_json::json!({"minlen": 2, "weight": 1}));
+        graph.set_edge("10", "d", serde_json::json!({"minlen": 2, "weight": 1}));
+
+        let _ = order_with_metrics(&mut graph, &serde_json::json!({"order": "fast"}));
+
+        let source_order = ["0", "1", "2", "10"]
+            .iter()
+            .map(|id| {
+                graph
+                    .node_label(id)
+                    .and_then(|label| label.get("order"))
+                    .and_then(serde_json::Value::as_u64)
+                    .expect("source order")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(source_order, vec![0, 1, 2, 3], "expected source insertion order to be preserved");
     }
 }
