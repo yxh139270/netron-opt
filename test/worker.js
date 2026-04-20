@@ -98,11 +98,19 @@ export class Target {
             this.measures.set('name', this.name);
         }
         await zip.Archive.import();
-        const environment = { zoom: 'none', serial: this.serial };
+        const orderEngine = process.env.NETRON_ORDER_ENGINE;
+        const environment = {
+            zoom: 'none',
+            serial: this.serial,
+            options: orderEngine ? { orderEngine } : undefined
+        };
         this.host = await new mock.Host(environment);
         this.view = new view.View(this.host);
         this.view.options.attributes = true;
         this.view.options.initializers = true;
+        if (process.env.NETRON_ORDER_ENGINE) {
+            this.view.options.orderEngine = process.env.NETRON_ORDER_ENGINE;
+        }
         const time = async (method) => {
             const start = process.hrtime.bigint();
             let err = null;

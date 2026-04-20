@@ -10,9 +10,13 @@ dist_pypi_dir = os.path.join(dist_dir, "pypi")
 def _build():
     import shutil
     source_dir = os.path.join(root_dir, "source")
+    wasm_source_dir = os.path.join(root_dir, "dist", "web", "wasm", "dagre-order-rs")
+    wasm_target_dir = os.path.join(dist_pypi_dir, "netron", "dist", "web", "wasm", "dagre-order-rs")
     shutil.rmtree(os.path.join(source_dir, "__pycache__"), ignore_errors=True)
     shutil.rmtree(dist_pypi_dir, ignore_errors=True)
     shutil.copytree(source_dir, os.path.join(dist_pypi_dir, "netron"))
+    if os.path.isdir(wasm_source_dir):
+        shutil.copytree(wasm_source_dir, wasm_target_dir, dirs_exist_ok=True)
     shutil.copyfile(
         os.path.join(root_dir, "pyproject.toml"),
         os.path.join(dist_pypi_dir, "pyproject.toml"))

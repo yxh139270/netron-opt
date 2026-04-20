@@ -51,12 +51,38 @@ fn run_layout(input: LayoutInput) -> LayoutOutput {
         }
     }
     let mut edge_ids = Vec::with_capacity(input.edges.len());
+    let rankdir = effective_layout
+        .get("rankdir")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("tb");
+    let rankdir_upper = rankdir.to_uppercase();
     for edge in &input.edges {
         let mut minlen = edge_minlen_with_label_spacing(&edge.data);
         if graph.parent(&edge.v) != graph.parent(&edge.w) {
             minlen += 2;
         }
-        let edge_id = graph.set_edge(&edge.v, &edge.w, serde_json::json!({ "minlen": minlen }));
+        // 保留 edge 的 width/height/labeloffset/labelpos，并应用 makeSpaceForEdgeLabels 逻辑
+        let mut width = edge.data.get("width").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        let mut height = edge.data.get("height").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        let labeloffset = edge.data.get("labeloffset").and_then(serde_json::Value::as_f64).unwrap_or(10.0);
+        let labelpos = edge.data.get("labelpos").and_then(serde_json::Value::as_str).unwrap_or("r");
+        let weight = edge.data.get("weight").and_then(serde_json::Value::as_i64).unwrap_or(1);
+        // makeSpaceForEdgeLabels: 当 labelpos 不是 'c' 时，调整 edge 尺寸
+        if labelpos != "c" {
+            if rankdir_upper == "TB" || rankdir_upper == "BT" {
+                width += labeloffset;
+            } else {
+                height += labeloffset;
+            }
+        }
+        let edge_id = graph.set_edge(&edge.v, &edge.w, serde_json::json!({
+            "minlen": minlen,
+            "weight": weight,
+            "width": width,
+            "height": height,
+            "labeloffset": labeloffset,
+            "labelpos": labelpos
+        }));
         edge_ids.push(edge_id);
     }
     stage_ms.insert(

@@ -2362,7 +2362,44 @@ dagre.layout = (nodes, edges, layout, state) => {
         acyclic_undo
     ];
     const profileStages = !!layout.profileStages;
+    const debugStages = !!layout.debugStages;
     const stageTimings = [];
+    const snapshotStage = (name) => {
+        if (!debugStages) {
+            return;
+        }
+        const nodesSnapshot = [];
+        for (const node of g.nodes.values()) {
+            const label = node.label || {};
+            nodesSnapshot.push({
+                id: node.v,
+                x: label.x,
+                y: label.y,
+                rank: label.rank,
+                order: label.order,
+                dummy: label.dummy,
+                borderType: label.borderType,
+                parent: g.parent(node.v)
+            });
+        }
+        const edgesSnapshot = [];
+        for (const edge of g.edges.values()) {
+            const label = edge.label || {};
+            edgesSnapshot.push({
+                v: edge.v,
+                w: edge.w,
+                minlen: label.minlen,
+                pointsLength: Array.isArray(label.points) ? label.points.length : 0
+            });
+        }
+        state.stageSnapshots = state.stageSnapshots || [];
+        state.stageSnapshots.push({
+            stage: name,
+            nodes: nodesSnapshot,
+            edges: edgesSnapshot
+        });
+    };
+    snapshotStage('graph-built');
     while (tasks.length > 0) {
         const task = tasks.shift();
         if (profileStages) {
@@ -2373,6 +2410,7 @@ dagre.layout = (nodes, edges, layout, state) => {
         } else {
             task(g, state, layout);
         }
+        snapshotStage(task.name || 'anonymous');
     }
 
     // Update source graph

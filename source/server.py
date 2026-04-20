@@ -60,7 +60,9 @@ class _HTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         ".eot": "application/vnd.ms-fontobject",
         ".woff": "font/woff",
         ".woff2": "font/woff2",
-        ".svg": "image/svg+xml"
+        ".svg": "image/svg+xml",
+        ".wasm": "application/wasm",
+        ".d.ts": "text/plain"
     }
     def do_HEAD(self):
         self.do_GET()

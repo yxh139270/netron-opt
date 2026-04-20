@@ -570,6 +570,15 @@ mycelium.Graph = class {
             layout.ranker = 'longest-path';
         }
         const state = {};
+        const dumpPath = globalThis.process && globalThis.process.env ? globalThis.process.env.NETRON_DAGRE_DUMP : '';
+        if (dumpPath) {
+            try {
+                const fs = await import('fs/promises');
+                await fs.writeFile(dumpPath, JSON.stringify({ nodes, edges, layout }, null, 2));
+            } catch {
+                // ignore dump errors
+            }
+        }
         const applyWasmLayoutResult = (result) => {
             if (!result || typeof result !== 'object') {
                 throw new Error('Invalid dagre-order-rs result.');
