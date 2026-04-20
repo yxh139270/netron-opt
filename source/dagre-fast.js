@@ -112,6 +112,58 @@ dagre.layout = (nodes, edges, layout, state) => {
         }
     }
 
+    // ----- 虚拟节点插入：为所有长边在中间 rank 插入 dummy 节点 -----
+    // 长边（rank span > 1）在每个中间 rank 插入一个 width=0 的虚拟节点，
+    // 虚拟节点参与 col 分配，使长边占据独立列位置，形成灯笼形布局。
+    const dummyChains = [];
+    let dummyCounter = 0;
+    for (const edge of edges) {
+        const src = nodeMap.get(edge.v);
+        const tgt = nodeMap.get(edge.w);
+        if (!src || !tgt) continue;
+        const rankSpan = tgt.rank - src.rank;
+        if (rankSpan <= 1) continue;
+        const chain = { originalV: edge.v, originalW: edge.w, dummies: [] };
+        let prevV = edge.v;
+        for (let r = src.rank + 1; r < tgt.rank; r++) {
+            const dummyId = `_dummy_${dummyCounter++}`;
+            const dummyNode = {
+                v: dummyId,
+                name: '',
+                title: '',
+                tensor: '',
+                identifier: '',
+                type: '',
+                width: 0,
+                height: 0,
+                inEdges: [prevV],
+                outEdges: [],
+                rank: r,
+                col: undefined,
+                x: undefined,
+                y: undefined,
+                isDummy: true
+            };
+            nodeMap.set(dummyId, dummyNode);
+            topoOrder.push(dummyId);
+            // 更新前驱的 outEdges：移除原始目标，添加 dummy
+            const prevNode = nodeMap.get(prevV);
+            prevNode.outEdges = prevNode.outEdges.filter((w) => w !== edge.w);
+            prevNode.outEdges.push(dummyId);
+            edgeMinlen.set(edgeKey(prevV, dummyId), 1);
+            chain.dummies.push(dummyId);
+            prevV = dummyId;
+        }
+        // 连接最后一个 dummy 到目标
+        const lastDummy = nodeMap.get(prevV);
+        lastDummy.outEdges.push(edge.w);
+        tgt.inEdges = tgt.inEdges.filter((v) => v !== edge.v);
+        tgt.inEdges.push(prevV);
+        edgeMinlen.set(edgeKey(prevV, edge.w), 1);
+        edgeMinlen.delete(edgeKey(edge.v, edge.w));
+        dummyChains.push(chain);
+    }
+
     // Assign col: process nodes rank by rank
     // For rank 0 (sources): assign col 0, 1, 2, ... in source order
     // For rank > 0: col = average of predecessor cols, then resolve collisions
@@ -578,6 +630,15 @@ dagre.layout = (nodes, edges, layout, state) => {
         }
         inputPortDebug.push({ target: target.v, width: target.width, left, ports });
     }
+    // 为被拆分的边建立 inputPortX 映射（虚拟节点 key → 原始边 key）
+    for (const chain of dummyChains) {
+        const lastDummy = chain.dummies[chain.dummies.length - 1];
+        const dummyKey = edgeKey(lastDummy, chain.originalW);
+        const portX = inputPortX.get(dummyKey);
+        if (portX !== undefined) {
+            inputPortX.set(edgeKey(chain.originalV, chain.originalW), portX);
+        }
+    }
 
     // ----- dagre-style edge routing -----
 
@@ -633,9 +694,13 @@ dagre.layout = (nodes, edges, layout, state) => {
     // 处理自环边
     const selfEdges = [];
     const normalEdges = [];
+    // 被虚拟节点拆分的原始边集合
+    const splitEdgeSet = new Set(dummyChains.map((c) => edgeKey(c.originalV, c.originalW)));
     for (const edge of edges) {
         if (edge.v === edge.w) {
             selfEdges.push(edge);
+        } else if (splitEdgeSet.has(edgeKey(edge.v, edge.w))) {
+            // 被拆分的边单独处理
         } else {
             normalEdges.push(edge);
         }
@@ -751,6 +816,45 @@ dagre.layout = (nodes, edges, layout, state) => {
             edge.x = (srcNode.x + tgtX) / 2;
             edge.y = (srcNode.y + tgtNode.y) / 2;
         }
+    }
+
+    // ----- 反归一化：将虚拟节点链合并回原始边 -----
+    for (const chain of dummyChains) {
+        const originalEdge = edges.find((e) => e.v === chain.originalV && e.w === chain.originalW);
+        if (!originalEdge) continue;
+        const srcNode = nodeMap.get(chain.originalV);
+        const tgtNode = nodeMap.get(chain.originalW);
+        if (!srcNode || !tgtNode) continue;
+        // 收集虚拟节点的坐标作为中间点
+        const dummyPoints = [];
+        for (const dummyId of chain.dummies) {
+            const dummyNode = nodeMap.get(dummyId);
+            if (dummyNode && Number.isFinite(dummyNode.x) && Number.isFinite(dummyNode.y)) {
+                dummyPoints.push({ x: dummyNode.x, y: dummyNode.y });
+            }
+        }
+        // 确定目标 x（考虑多输入端口）
+        // 注意：C 的 inEdges 已被修改（A 被替换为最后一个 dummy），
+        // 需要用原始边的 key 查找 inputPortX
+        const tgtX = inputPortX.get(edgeKey(chain.originalV, chain.originalW)) ?? tgtNode.x;
+        // 计算精确的节点边界交点
+        const srcRect = { x: srcNode.x, y: srcNode.y, width: srcNode.width, height: srcNode.height };
+        const tgtRect = { x: tgtNode.x, y: tgtNode.y, width: tgtNode.width, height: tgtNode.height };
+        const firstMid = dummyPoints.length > 0 ? dummyPoints[0] : { x: tgtX, y: tgtNode.y };
+        const lastMid = dummyPoints.length > 0 ? dummyPoints[dummyPoints.length - 1] : { x: srcNode.x, y: srcNode.y };
+        const srcIntersect = intersectRect(srcRect, firstMid);
+        const tgtIntersect = intersectRect(tgtRect, lastMid);
+        // 确保至少 3 个点
+        if (dummyPoints.length === 0) {
+            const midX = (srcIntersect.x + tgtIntersect.x) / 2;
+            const midY = (srcIntersect.y + tgtIntersect.y) / 2;
+            dummyPoints.push({ x: midX, y: midY });
+        }
+        originalEdge.points = [srcIntersect, ...dummyPoints, tgtIntersect];
+        // 边标签锚点
+        const labelIdx = Math.floor(dummyPoints.length / 2);
+        originalEdge.x = dummyPoints[labelIdx].x;
+        originalEdge.y = dummyPoints[labelIdx].y;
     }
 
     void inputPortDebug;
