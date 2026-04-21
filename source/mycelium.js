@@ -662,16 +662,8 @@ mycelium.Graph = class {
                 }
             }
         };
-        const layoutEngine = String((this.options && this.options.layoutEngine) || 'dagre-order').toLowerCase();
-        if (layoutEngine === 'dagre') {
-            // 原始 dagre 布局引擎
-            const dagre = await import('./dagre.js');
-            dagre.layout(nodes, edges, layout, state);
-        } else if (layoutEngine === 'dagre-fast') {
-            // 快速布局引擎
-            const dagre = await import('./dagre-fast.js');
-            dagre.layout(nodes, edges, layout, state);
-        } else if (worker) {
+        const orderEngine = String((this.options && this.options.orderEngine) || layout.orderEngine || 'rust-proto').toLowerCase();
+        if (worker) {
             const message = await worker.request({ type: 'dagre.layout', nodes, edges, layout, state }, 2500, 'This large graph layout might take a very long time to complete.');
             if (message.type === 'cancel' || message.type === 'terminate') {
                 return message.type;
@@ -679,8 +671,7 @@ mycelium.Graph = class {
             nodes = message.nodes;
             edges = message.edges;
             state.log = message.state.log;
-        } else {
-            // dagre-order: 先尝试 rust-proto wasm，失败则回退到 js
+        } else if (orderEngine === 'rust-proto') {
             try {
                 const dagreOrderRs = await import('./dagre-order-rs.js');
                 const result = await dagreOrderRs.layout(nodes, edges, layout, state);
@@ -692,8 +683,11 @@ mycelium.Graph = class {
                 const dagre = await import('./dagre-order.js');
                 dagre.layout(nodes, edges, layout, state);
             }
+        } else {
+            const dagre = await import('./dagre-order.js');
+            dagre.layout(nodes, edges, layout, state);
         }
-        if (layoutEngine === 'dagre-order' && state.log && globalThis.console && typeof globalThis.console.log === 'function') {
+        if (orderEngine === 'rust-proto' && state.log && globalThis.console && typeof globalThis.console.log === 'function') {
             globalThis.console.log(`[dagre-order-rs] stage_ms ${state.log}`);
         }
         state.log = '';

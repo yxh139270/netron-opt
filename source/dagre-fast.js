@@ -579,24 +579,8 @@ dagre.layout = (nodes, edges, layout, state) => {
         inputPortDebug.push({ target: target.v, width: target.width, left, ports });
     }
 
-    // ----- dagre-style edge routing -----
-
-    // 计算每个 rank 的代表 y 值（取该 rank 所有节点 y 的中位数）
-    const rankYValues = new Map();
-    for (const node of nodeMap.values()) {
-        const r = node.rank;
-        if (r === undefined) continue;
-        const list = rankYValues.get(r) || [];
-        list.push(node.y);
-        rankYValues.set(r, list);
-    }
-    const rankY = new Map();
-    for (const [r, ys] of rankYValues) {
-        ys.sort((a, b) => a - b);
-        rankY.set(r, ys[Math.floor(ys.length / 2)]);
-    }
-
-    // 构建节点包围盒用于避障
+    // For each edge, create a smooth 4-point polyline that the renderer converts
+    // to bezier segments. This improves visual quality over pure straight lines.
     const nodeBoxes = Array.from(nodeMap.values()).map((node) => ({
         id: node.v,
         left: node.x - (node.width / 2),
@@ -604,153 +588,136 @@ dagre.layout = (nodes, edges, layout, state) => {
         top: node.y - (node.height / 2),
         bottom: node.y + (node.height / 2)
     }));
-
-    // 检测点是否在某个节点包围盒内（排除指定节点）
-    const pointInBox = (px, py, box, margin = 8) => {
-        return px >= box.left - margin && px <= box.right + margin &&
-               py >= box.top - margin && py <= box.bottom + margin;
+    const segmentIntersectsBox = (a, b, box, margin = 6) => {
+        const left = box.left - margin;
+        const right = box.right + margin;
+        const top = box.top - margin;
+        const bottom = box.bottom + margin;
+        if (Math.abs(a.x - b.x) < 1e-6) {
+            const x = a.x;
+            if (x < left || x > right) {
+                return false;
+            }
+            const minY = Math.min(a.y, b.y);
+            const maxY = Math.max(a.y, b.y);
+            return !(maxY < top || minY > bottom);
+        }
+        if (Math.abs(a.y - b.y) < 1e-6) {
+            const y = a.y;
+            if (y < top || y > bottom) {
+                return false;
+            }
+            const minX = Math.min(a.x, b.x);
+            const maxX = Math.max(a.x, b.x);
+            return !(maxX < left || minX > right);
+        }
+        const minX = Math.min(a.x, b.x);
+        const maxX = Math.max(a.x, b.x);
+        const minY = Math.min(a.y, b.y);
+        const maxY = Math.max(a.y, b.y);
+        return !(maxX < left || minX > right || maxY < top || minY > bottom);
+    };
+    const pathObstacleScore = (points, sourceId, targetId) => {
+        let score = 0;
+        for (let i = 0; i < points.length - 1; i++) {
+            const a = points[i];
+            const b = points[i + 1];
+            for (const box of nodeBoxes) {
+                if (box.id === sourceId || box.id === targetId) {
+                    continue;
+                }
+                if (segmentIntersectsBox(a, b, box)) {
+                    score++;
+                }
+            }
+        }
+        return score;
     };
 
-    // 精确计算线段与矩形的交点（移植自 dagre.js assignNodeIntersects）
-    const intersectRect = (rect, point) => {
-        const x = rect.x;
-        const y = rect.y;
-        const dx = point.x - x;
-        const dy = point.y - y;
-        if (dx === 0 && dy === 0) {
-            return { x, y };
-        }
-        let w = rect.width / 2;
-        let h = rect.height / 2;
-        if (Math.abs(dy) * w > Math.abs(dx) * h) {
-            h = dy < 0 ? -h : h;
-            return { x: x + (h * dx / dy), y: y + h };
-        }
-        w = dx < 0 ? -w : w;
-        return { x: x + w, y: y + (w * dy / dx) };
-    };
-
-    // 处理自环边
-    const selfEdges = [];
-    const normalEdges = [];
     for (const edge of edges) {
-        if (edge.v === edge.w) {
-            selfEdges.push(edge);
-        } else {
-            normalEdges.push(edge);
-        }
-    }
-
-    // 自环边路径（移植自 dagre.js positionSelfEdges）
-    for (const edge of selfEdges) {
-        const selfNode = nodeMap.get(edge.v);
-        if (!selfNode) continue;
-        const x = selfNode.x + selfNode.width / 2;
-        const y = selfNode.y;
-        const dx = selfNode.width * 0.6;
-        const dy = selfNode.height / 2;
-        edge.points = [
-            { x: x + 2 * dx / 3, y: y - dy },
-            { x: x + 5 * dx / 6, y: y - dy },
-            { x: x + dx, y },
-            { x: x + 5 * dx / 6, y: y + dy },
-            { x: x + 2 * dx / 3, y: y + dy }
-        ];
-        edge.x = x + dx;
-        edge.y = y;
-    }
-
-    // 普通边路径：为长边生成中间点，然后计算精确交点
-    for (const edge of normalEdges) {
         const srcNode = nodeMap.get(edge.v);
         const tgtNode = nodeMap.get(edge.w);
         if (!srcNode || !tgtNode) continue;
 
-        const srcRank = srcNode.rank;
-        const tgtRank = tgtNode.rank;
-        const rankSpan = tgtRank !== undefined && srcRank !== undefined ? Math.abs(tgtRank - srcRank) : 1;
+        const srcCenter = { x: srcNode.x, y: srcNode.y };
+        const tgtCenter = { x: tgtNode.x, y: tgtNode.y };
+        const dy = tgtCenter.y - srcCenter.y;
 
-        // 确定目标 x（考虑多输入端口）
-        const targetInDegree = tgtNode.inEdges.length;
-        const tgtX = targetInDegree > 1
-            ? (inputPortX.get(edgeKey(edge.v, edge.w)) ?? tgtNode.x)
-            : tgtNode.x;
+        let p1;
+        let p2;
+        // For vertical flows, force incoming edges to approach target from top/bottom,
+        // so multi-input edges connect on the node top edge instead of side edges.
+        if (rankDir === 'tb' || rankDir === 'bt') {
+            const direction = dy >= 0 ? 1 : -1;
+            const sourceExitY = direction > 0
+                ? (srcCenter.y + (srcNode.height / 2) + 8)
+                : (srcCenter.y - (srcNode.height / 2) - 8);
 
-        // 中间点列表（不含起止点）
-        const midPoints = [];
+            // Keep the approach to target mostly vertical so incoming edges
+            // intersect target on top/bottom edge instead of the side edge.
+            const targetInDegree = tgtNode.inEdges.length;
+            const targetApproachX = targetInDegree > 1 ?
+                (inputPortX.get(edgeKey(edge.v, edge.w)) ?? tgtCenter.x) :
+                (tgtCenter.x + (srcCenter.x - tgtCenter.x) * 0.2);
+            // Keep target approach outside the node so intersection prefers
+            // top/bottom edge over side edge for multi-input links.
+            const approachLift = 12;
+            const targetApproachY = direction > 0
+                ? (tgtCenter.y - (tgtNode.height / 2) - approachLift)
+                : (tgtCenter.y + (tgtNode.height / 2) + approachLift);
 
-        if (rankSpan > 1 && srcRank !== undefined && tgtRank !== undefined) {
-            // 长边：在每个中间 rank 插入虚拟折点
-            const minR = Math.min(srcRank, tgtRank);
-            const maxR = Math.max(srcRank, tgtRank);
-            const forward = tgtRank > srcRank;
-            for (let r = minR + 1; r < maxR; r++) {
-                const t = (r - srcRank) / (tgtRank - srcRank);
-                const midX = srcNode.x + (tgtX - srcNode.x) * t;
-                const midY = rankY.get(r);
-                if (midY !== undefined) {
-                    midPoints.push({ x: midX, y: midY, rank: r });
+            const candidates = [];
+            const baseLaneX = (srcCenter.x + targetApproachX) / 2;
+            const laneStep = Math.max(nodesep, 28);
+            const laneOffsets = [0];
+            for (let k = 1; k <= 6; k++) {
+                laneOffsets.push(k * laneStep);
+                laneOffsets.push(-k * laneStep);
+            }
+            for (const offset of laneOffsets) {
+                const laneX = baseLaneX + offset;
+                const points = [
+                    { x: srcCenter.x, y: srcCenter.y },
+                    { x: srcCenter.x, y: sourceExitY },
+                    { x: laneX, y: sourceExitY },
+                    { x: laneX, y: targetApproachY },
+                    { x: targetApproachX, y: targetApproachY },
+                    { x: tgtCenter.x, y: tgtCenter.y }
+                ];
+                const score = pathObstacleScore(points, edge.v, edge.w);
+                candidates.push({ score, points, laneX });
+                if (score === 0 && Math.abs(offset) < 1e-6) {
+                    break;
                 }
             }
-            if (!forward) {
-                midPoints.reverse();
-            }
-
-            // 避障：检测中间点是否与节点重叠，如果重叠则水平偏移
-            for (const mp of midPoints) {
-                for (const box of nodeBoxes) {
-                    if (box.id === edge.v || box.id === edge.w) continue;
-                    if (pointInBox(mp.x, mp.y, box)) {
-                        // 偏移到节点右侧或左侧，选择距离更近的一侧
-                        const distLeft = mp.x - (box.left - 12);
-                        const distRight = (box.right + 12) - mp.x;
-                        if (distLeft < distRight) {
-                            mp.x = box.left - 12;
-                        } else {
-                            mp.x = box.right + 12;
-                        }
-                    }
+            candidates.sort((a, b) => {
+                if (a.score !== b.score) {
+                    return a.score - b.score;
                 }
-            }
-        }
-
-        // 有标签的边：在中间放置标签锚点
-        const hasLabel = (Number.isFinite(edge.width) && edge.width > 0) ||
-                         (Number.isFinite(edge.height) && edge.height > 0);
-
-        // 组装完整路径点
-        const allPoints = midPoints.map((p) => ({ x: p.x, y: p.y }));
-
-        // 计算精确的节点边界交点
-        const srcRect = { x: srcNode.x, y: srcNode.y, width: srcNode.width, height: srcNode.height };
-        const tgtRect = { x: tgtNode.x, y: tgtNode.y, width: tgtNode.width, height: tgtNode.height };
-
-        // 确定第一个中间点（用于计算源节点交点方向）
-        const firstMid = allPoints.length > 0 ? allPoints[0] : { x: tgtX, y: tgtNode.y };
-        // 确定最后一个中间点（用于计算目标节点交点方向）
-        const lastMid = allPoints.length > 0 ? allPoints[allPoints.length - 1] : { x: srcNode.x, y: srcNode.y };
-
-        const srcIntersect = intersectRect(srcRect, firstMid);
-        const tgtIntersect = intersectRect(tgtRect, lastMid);
-
-        // curvePath 期望 points 至少 3 个点（首尾交点 + 至少一个中间点）
-        if (allPoints.length === 0) {
-            const midX = (srcIntersect.x + tgtIntersect.x) / 2;
-            const midY = (srcIntersect.y + tgtIntersect.y) / 2;
-            allPoints.push({ x: midX, y: midY });
-        }
-        edge.points = [srcIntersect, ...allPoints, tgtIntersect];
-
-        // 边标签锚点
-        if (hasLabel && midPoints.length > 0) {
-            // 标签放在中间 rank 的折点处
-            const labelIdx = Math.floor(midPoints.length / 2);
-            edge.x = midPoints[labelIdx].x;
-            edge.y = midPoints[labelIdx].y;
+                return Math.abs(a.laneX - baseLaneX) - Math.abs(b.laneX - baseLaneX);
+            });
+            edge.points = candidates.length > 0 ? candidates[0].points : [
+                { x: srcCenter.x, y: srcCenter.y },
+                { x: srcCenter.x, y: sourceExitY },
+                { x: targetApproachX, y: targetApproachY },
+                { x: tgtCenter.x, y: tgtCenter.y }
+            ];
         } else {
-            edge.x = (srcNode.x + tgtX) / 2;
-            edge.y = (srcNode.y + tgtNode.y) / 2;
+            const dx = tgtCenter.x - srcCenter.x;
+            const bend = dx * 0.5;
+            p1 = { x: srcCenter.x + bend, y: srcCenter.y };
+            p2 = { x: tgtCenter.x - bend, y: tgtCenter.y };
+            edge.points = [
+                { x: srcCenter.x, y: srcCenter.y },
+                p1,
+                p2,
+                { x: tgtCenter.x, y: tgtCenter.y }
+            ];
         }
+
+        // Edge label anchor (always finite to avoid NaN in renderer)
+        edge.x = (srcCenter.x + tgtCenter.x) / 2;
+        edge.y = (srcCenter.y + tgtCenter.y) / 2;
     }
 
     void inputPortDebug;
