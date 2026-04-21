@@ -71,6 +71,14 @@ browser.Host = class {
             return Promise.resolve();
         };
         const consent = async () => {
+            const isLocalHost = this._window && this._window.location && (
+                this._window.location.hostname === '127.0.0.1' ||
+                this._window.location.hostname === 'localhost'
+            );
+            if (!this._environment.packaged || isLocalHost) {
+                this._setCookie('consent', Date.now().toString(), 30);
+                return;
+            }
             if (this._getCookie('consent') || this._getCookie('_ga')) {
                 return;
             }

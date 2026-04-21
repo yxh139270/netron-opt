@@ -654,6 +654,13 @@ mycelium.Graph = class {
             this.originX = minX;
             this.originY = minY;
         }
+        if (typeof globalThis.console !== 'undefined' && globalThis.console.log) {
+            globalThis.console.log(`[mycelium] layout() done: graph origin=(${this.originX},${this.originY}) size=${this.width}x${this.height} nodes=${nodes.length} edges=${edges.length}`);
+            for (const node of nodes) {
+                const label = this.node(node.v).label;
+                globalThis.console.log(`[mycelium]   node v=${JSON.stringify(node.v)} name="${node.name}" title="${node.title}" x=${node.x} y=${node.y} w=${node.width} h=${node.height} -> label.x=${label.x} label.y=${label.y} label.w=${label.width} label.h=${label.height}`);
+            }
+        }
         for (const key of this.nodes.keys()) {
             const entry = this.node(key);
             if (this.children(key).length === 0) {
@@ -843,7 +850,16 @@ mycelium.Node = class {
             }
             return;
         }
-        this.element.setAttribute('transform', `translate(${this.x - (this.width / 2)},${this.y - (this.height / 2)})`);
+        const tx = this.x - (this.width / 2);
+        const ty = this.y - (this.height / 2);
+        this.element.setAttribute('transform', `translate(${tx},${ty})`);
+        if (!this._updateLogged) {
+            this._updateLogged = true;
+            const view = this.element && this.element.ownerDocument && this.element.ownerDocument.defaultView;
+            if (view && view.console && view.console.log) {
+                view.console.log(`[mycelium] node.update() id=${this.id} name=${this.name} x=${this.x} y=${this.y} w=${this.width} h=${this.height} -> translate(${tx},${ty})`);
+            }
+        }
         this.border.setAttribute('d', mycelium.Node.roundedRect(0, 0, this.width, this.height, true, true, true, true));
         for (const block of this.blocks) {
             block.update();
