@@ -680,6 +680,7 @@ dagre.layout = (nodes, edges, layout, state) => {
     // If a node has k inputs, place ports at fractions 1/(k+1), 2/(k+1), ... k/(k+1)
     // across the node width, then map incoming edges left-to-right by source x.
     const inputPortX = new Map();
+    const outputPortX = new Map();
     const inputPortDebug = [];
     for (const target of nodeMap.values()) {
         if (target.inEdges.length <= 1) {
@@ -711,6 +712,44 @@ dagre.layout = (nodes, edges, layout, state) => {
             left,
             ports,
         });
+    }
+
+    // Pre-compute output port positions for multi-output nodes.
+    // If a node has k outputs, place ports at fractions 1/(k+1) ... k/(k+1)
+    // across node width, then map outgoing edges left-to-right by target x.
+    const edgesBySource = new Map();
+    for (const edge of edges) {
+        const list = edgesBySource.get(edge.v) || [];
+        list.push(edge);
+        edgesBySource.set(edge.v, list);
+    }
+    for (const [sourceId, outList] of edgesBySource) {
+        if (!Array.isArray(outList) || outList.length <= 1) {
+            continue;
+        }
+        const source = nodeMap.get(sourceId);
+        if (!source) {
+            continue;
+        }
+        const sorted = outList.slice().sort((a, b) => {
+            const ax = (nodeMap.get(a.w) && Number.isFinite(nodeMap.get(a.w).x))
+                ? nodeMap.get(a.w).x
+                : 0;
+            const bx = (nodeMap.get(b.w) && Number.isFinite(nodeMap.get(b.w).x))
+                ? nodeMap.get(b.w).x
+                : 0;
+            if (Math.abs(ax - bx) > 1e-6) {
+                return ax - bx;
+            }
+            return String(a.w).localeCompare(String(b.w));
+        });
+        const k = sorted.length;
+        const left = source.x - source.width / 2;
+        for (let i = 0; i < k; i++) {
+            const fraction = (i + 1) / (k + 1);
+            const portX = left + source.width * fraction;
+            outputPortX.set(edgeKey(sorted[i].v, sorted[i].w), portX);
+        }
     }
 
     // For each edge, create a smooth 4-point polyline that the renderer converts
@@ -818,6 +857,7 @@ dagre.layout = (nodes, edges, layout, state) => {
         const srcCenter = { x: srcNode.x, y: srcNode.y };
         const tgtCenter = { x: tgtNode.x, y: tgtNode.y };
         const dy = tgtCenter.y - srcCenter.y;
+        const sourcePortX = outputPortX.get(edgeKey(edge.v, edge.w)) ?? srcCenter.x;
 
         // ----- use virtual nodes as edge waypoints -----
         // If this edge has a virtual chain (inserted during long-edge splitting),
@@ -848,28 +888,49 @@ dagre.layout = (nodes, edges, layout, state) => {
             const lastY = last && Number.isFinite(rankBandBottom.get(last.rank)) ? rankBandBottom.get(last.rank) : (last ? last.y : NaN);
             const midX = (srcCenter.x + tgtCenter.x) / 2;
             const midY = (sourceExitY + targetApproachY) / 2;
+            const easePoint = (fromX, fromY, toX, toY, t) => {
+                const eased = t * t; // y=x^2 style easing: slow then fast
+                return {
+                    x: fromX + (toX - fromX) * eased,
+                    y: fromY + (toY - fromY) * t
+                };
+            };
+            const easePointInv = (fromX, fromY, toX, toY, t) => {
+                const eased = 1 - (1 - t) * (1 - t); // y=-x^2 style easing: fast then slow
+                return {
+                    x: fromX + (toX - fromX) * eased,
+                    y: fromY + (toY - fromY) * t
+                };
+            };
+            const sourceExitX = first
+                ? easePointInv(sourcePortX, sourceExitY, first.x, firstY, 0.18).x
+                : sourcePortX;
             edge.points = first && last && first !== last
                 ? [
-                    { x: srcCenter.x, y: srcCenter.y },
-                    { x: srcCenter.x, y: sourceExitY },
-                    { x: first.x, y: firstY },
+                    { x: sourcePortX, y: srcCenter.y },
+                    { x: sourceExitX, y: sourceExitY },
+                    easePointInv(sourcePortX, sourceExitY, first.x, firstY, 0.35),
+                    easePointInv(sourcePortX, sourceExitY, first.x, firstY, 0.75),
                     { x: first.x, y: firstY },
                     { x: last.x, y: lastY },
-                    { x: last.x, y: lastY },
-                    { x: tgtCenter.x, y: targetApproachY },
+                    easePoint(last.x, lastY, tgtCenter.x, tgtCenter.y, 0.35),
+                    easePoint(last.x, lastY, tgtCenter.x, tgtCenter.y, 0.75),
                     { x: tgtCenter.x, y: tgtCenter.y }
                 ]
                 : first
                 ? [
-                    { x: srcCenter.x, y: srcCenter.y },
-                    { x: srcCenter.x, y: sourceExitY },
+                    { x: sourcePortX, y: srcCenter.y },
+                    { x: sourceExitX, y: sourceExitY },
+                    easePointInv(sourcePortX, sourceExitY, first.x, firstY, 0.35),
+                    easePointInv(sourcePortX, sourceExitY, first.x, firstY, 0.75),
                     { x: first.x, y: firstY },
-                    { x: tgtCenter.x, y: targetApproachY },
+                    easePoint(first.x, firstY, tgtCenter.x, tgtCenter.y, 0.35),
+                    easePoint(first.x, firstY, tgtCenter.x, tgtCenter.y, 0.75),
                     { x: tgtCenter.x, y: tgtCenter.y }
                 ]
                 : [
-                    { x: srcCenter.x, y: srcCenter.y },
-                    { x: srcCenter.x, y: sourceExitY },
+                    { x: sourcePortX, y: srcCenter.y },
+                    { x: sourcePortX, y: sourceExitY },
                     { x: midX, y: midY },
                     { x: tgtCenter.x, y: targetApproachY },
                     { x: tgtCenter.x, y: tgtCenter.y }
@@ -889,31 +950,38 @@ dagre.layout = (nodes, edges, layout, state) => {
                 direction > 0
                     ? srcCenter.y + srcNode.height / 2 + 8
                     : srcCenter.y - srcNode.height / 2 - 8;
+            const easePoint = (fromX, fromY, toX, toY, t) => {
+                const eased = t * t; // y=x^2 style easing: slow then fast
+                return {
+                    x: fromX + (toX - fromX) * eased,
+                    y: fromY + (toY - fromY) * t
+                };
+            };
+            const easePointInv = (fromX, fromY, toX, toY, t) => {
+                const eased = 1 - (1 - t) * (1 - t); // y=-x^2 style easing: fast then slow
+                return {
+                    x: fromX + (toX - fromX) * eased,
+                    y: fromY + (toY - fromY) * t
+                };
+            };
 
             // Keep the approach to target mostly vertical so incoming edges
             // intersect target on top/bottom edge instead of the side edge.
             const targetInDegree = tgtNode.inEdges.length;
-            const targetApproachX =
+            const targetPortX =
                 targetInDegree > 1
                     ? (inputPortX.get(edgeKey(edge.v, edge.w)) ?? tgtCenter.x)
-                    : tgtCenter.x + (srcCenter.x - tgtCenter.x) * 0.2;
-            // Keep target approach outside the node so intersection prefers
-            // top/bottom edge over side edge for multi-input links.
-            const approachLift = 12;
+                    : tgtCenter.x;
+            const approachLift = 10;
             const targetApproachY =
                 direction > 0
                     ? tgtCenter.y - tgtNode.height / 2 - approachLift
                     : tgtCenter.y + tgtNode.height / 2 + approachLift;
-
-            // Keep vertical routing compact: one broad arc (few control points)
-            // instead of multi-lane Manhattan turns.
-            const midX = (srcCenter.x + targetApproachX) / 2;
-            const midY = (sourceExitY + targetApproachY) / 2;
+            const sourceExitX = easePointInv(sourcePortX, sourceExitY, targetPortX, targetApproachY, 0.08).x;
             edge.points = [
-                { x: srcCenter.x, y: srcCenter.y },
-                { x: srcCenter.x, y: sourceExitY },
-                { x: midX, y: midY },
-                { x: targetApproachX, y: targetApproachY },
+                { x: sourcePortX, y: srcCenter.y },
+                { x: sourceExitX, y: sourceExitY },
+                { x: targetPortX, y: targetApproachY },
                 { x: tgtCenter.x, y: tgtCenter.y }
             ];
         } else {
