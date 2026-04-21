@@ -17,6 +17,7 @@ view.View = class {
             attributes: false,
             names: false,
             direction: 'vertical',
+            layoutEngine: 'dagre-order',
             mousewheel: 'scroll',
             layoutEstimateMode: 'on',
             layoutEstimateThreshold: 1500,
@@ -181,6 +182,15 @@ view.View = class {
                         return `Layout &Estimate: ${mode}`;
                     },
                     execute: () => this.toggle('layoutEstimateMode'),
+                    enabled: () => this.activeTarget
+                });
+                view.add({
+                    label: () => {
+                        const engine = String(this.options.layoutEngine || 'dagre-order').toLowerCase();
+                        const name = engine === 'dagre-fast' ? 'Dagre-Fast' : engine === 'dagre' ? 'Dagre' : 'Dagre-Order';
+                        return `Layout &Engine: ${name}`;
+                    },
+                    execute: () => this.toggle('layoutEngine'),
                     enabled: () => this.activeTarget
                 });
                 view.add({
@@ -373,6 +383,12 @@ view.View = class {
                 this._options.layoutEstimateMode = this._options.layoutEstimateMode === 'auto' ? 'on' : this._options.layoutEstimateMode === 'on' ? 'off' : 'auto';
                 this._reload();
                 break;
+            case 'layoutEngine': {
+                const engine = String(this._options.layoutEngine || 'dagre-order').toLowerCase();
+                this._options.layoutEngine = engine === 'dagre-order' ? 'dagre-fast' : engine === 'dagre-fast' ? 'dagre' : 'dagre-order';
+                this._reload();
+                break;
+            }
             case 'mousewheel':
                 this._options.mousewheel = this._options.mousewheel === 'scroll' ? 'zoom' : 'scroll';
                 break;
@@ -1112,13 +1128,14 @@ view.View = class {
         const threshold = Number.isFinite(this.options.layoutEstimateThreshold) ? this.options.layoutEstimateThreshold : 1500;
         const count = graph && Array.isArray(graph.nodes) ? graph.nodes.length : 0;
         const mode = this.options.layoutEstimateMode || 'auto';
+        const layoutEngine = String(this.options.layoutEngine || this.options.orderEngine || 'dagre-order').toLowerCase();
         if (mode === 'on') {
-            return { estimateOnly: true };
+            return { estimateOnly: true, layoutEngine };
         }
         if (mode === 'off') {
-            return { estimateOnly: false };
+            return { estimateOnly: false, layoutEngine };
         }
-        return { estimateOnly: count >= threshold };
+        return { estimateOnly: count >= threshold, layoutEngine };
     }
 
     async export(file) {

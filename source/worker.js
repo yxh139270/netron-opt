@@ -5,6 +5,8 @@ const require = async () => {
         return worker_threads.parentPort;
     }
     import('./dagre-order.js');
+    import('./dagre-fast.js');
+    import('./dagre.js');
     return self;
 };
 
@@ -14,11 +16,13 @@ require().then((self) => {
         switch (message.type) {
             case 'dagre.layout': {
                 try {
-                    const dagre = await import('./dagre-order.js');
+                    const engine = String((message.layout && (message.layout.layoutEngine || message.layout.orderEngine)) || 'dagre-order').toLowerCase();
+                    const modulePath = engine === 'dagre-fast' ? './dagre-fast.js' : engine === 'dagre' ? './dagre.js' : './dagre-order.js';
+                    const dagre = await import(modulePath);
                     dagre.layout(message.nodes, message.edges, message.layout, message.state);
                     if (typeof console !== 'undefined' && console.warn) {
                         const hasLog = !!(message.state && message.state.log);
-                        console.warn(`[worker] dagre.layout done hasLog=${hasLog} nodes=${message.nodes ? message.nodes.length : 0} edges=${message.edges ? message.edges.length : 0}`);
+                        console.warn(`[worker] dagre.layout engine=${engine} done hasLog=${hasLog} nodes=${message.nodes ? message.nodes.length : 0} edges=${message.edges ? message.edges.length : 0}`);
                     }
                     self.postMessage(message);
                 } catch (error) {

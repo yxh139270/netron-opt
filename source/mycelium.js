@@ -579,90 +579,7 @@ mycelium.Graph = class {
                 // ignore dump errors
             }
         }
-        const applyWasmLayoutResult = (result) => {
-            if (!result || typeof result !== 'object') {
-                throw new Error('Invalid dagre-order-rs result.');
-            }
-            if (result.error) {
-                const code = result.error.code || 'layout_error';
-                const message = result.error.message || 'unknown';
-                throw new Error(`dagre-order-rs ${code}: ${message}`);
-            }
-            const resultNodes = Array.isArray(result.nodes) ? result.nodes : [];
-            const resultEdges = Array.isArray(result.edges) ? result.edges : [];
-            if (resultNodes.length < nodes.length) {
-                throw new Error(`dagre-order-rs returned ${resultNodes.length} nodes for ${nodes.length}.`);
-            }
-            if (resultEdges.length < edges.length) {
-                throw new Error(`dagre-order-rs returned ${resultEdges.length} edges for ${edges.length}.`);
-            }
-            const nodeMap = new Map();
-            for (const node of resultNodes) {
-                if (node && typeof node.id === 'string') {
-                    nodeMap.set(node.id, node);
-                }
-            }
-            for (const node of nodes) {
-                const mapped = nodeMap.get(node.v);
-                if (!mapped) {
-                    throw new Error(`dagre-order-rs missing node '${node.v}'.`);
-                }
-                if (Number.isFinite(mapped.x)) {
-                    node.x = mapped.x;
-                }
-                if (Number.isFinite(mapped.y)) {
-                    node.y = mapped.y;
-                }
-                if (Number.isFinite(mapped.width)) {
-                    node.width = mapped.width;
-                }
-                if (Number.isFinite(mapped.height)) {
-                    node.height = mapped.height;
-                }
-            }
-            const edgeBuckets = new Map();
-            for (const edge of resultEdges) {
-                if (edge && typeof edge.v === 'string' && typeof edge.w === 'string') {
-                    const key = JSON.stringify([edge.v, edge.w]);
-                    if (!edgeBuckets.has(key)) {
-                        edgeBuckets.set(key, []);
-                    }
-                    edgeBuckets.get(key).push(edge);
-                }
-            }
-            for (const edge of edges) {
-                const key = JSON.stringify([edge.v, edge.w]);
-                const bucket = edgeBuckets.get(key);
-                const mapped = bucket && bucket.length > 0 ? bucket.shift() : null;
-                if (!mapped) {
-                    throw new Error(`dagre-order-rs missing edge '${edge.v}' -> '${edge.w}'.`);
-                }
-                if (Array.isArray(mapped.points)) {
-                    edge.points = mapped.points;
-                }
-                if (Number.isFinite(mapped.x)) {
-                    edge.x = mapped.x;
-                }
-                if (Number.isFinite(mapped.y)) {
-                    edge.y = mapped.y;
-                }
-                if (Number.isFinite(mapped.width)) {
-                    edge.width = mapped.width;
-                }
-                if (Number.isFinite(mapped.height)) {
-                    edge.height = mapped.height;
-                }
-            }
-            const meta = result.meta && typeof result.meta === 'object' ? result.meta : null;
-            if (meta && meta.stage_ms && typeof meta.stage_ms === 'object') {
-                try {
-                    state.log = JSON.stringify(meta.stage_ms);
-                } catch {
-                    // ignore stage logging failures
-                }
-            }
-        };
-        const orderEngine = String((this.options && this.options.orderEngine) || layout.orderEngine || 'rust-proto').toLowerCase();
+        const layoutEngine = String((this.options && (this.options.layoutEngine || this.options.orderEngine)) || layout.layoutEngine || layout.orderEngine || 'dagre-order').toLowerCase();
         if (worker) {
             const message = await worker.request({ type: 'dagre.layout', nodes, edges, layout, state }, 2500, 'This large graph layout might take a very long time to complete.');
             if (message.type === 'cancel' || message.type === 'terminate') {
@@ -671,23 +588,17 @@ mycelium.Graph = class {
             nodes = message.nodes;
             edges = message.edges;
             state.log = message.state.log;
-        } else if (orderEngine === 'rust-proto') {
-            try {
-                const dagreOrderRs = await import('./dagre-order-rs.js');
-                const result = await dagreOrderRs.layout(nodes, edges, layout, state);
-                applyWasmLayoutResult(result);
-            } catch (error) {
-                if (globalThis.console && typeof globalThis.console.warn === 'function') {
-                    globalThis.console.warn(`[dagre-order-rs] fallback to js: ${error && error.message ? error.message : error}`);
-                }
-                const dagre = await import('./dagre-order.js');
-                dagre.layout(nodes, edges, layout, state);
-            }
+        } else if (layoutEngine === 'dagre') {
+            const dagre = await import('./dagre.js');
+            dagre.layout(nodes, edges, layout, state);
+        } else if (layoutEngine === 'dagre-fast') {
+            const dagre = await import('./dagre-fast.js');
+            dagre.layout(nodes, edges, layout, state);
         } else {
             const dagre = await import('./dagre-order.js');
             dagre.layout(nodes, edges, layout, state);
         }
-        if (orderEngine === 'rust-proto' && state.log && globalThis.console && typeof globalThis.console.log === 'function') {
+        if (layoutEngine === 'dagre-order' && state.log && globalThis.console && typeof globalThis.console.log === 'function') {
             globalThis.console.log(`[dagre-order-rs] stage_ms ${state.log}`);
         }
         state.log = '';
