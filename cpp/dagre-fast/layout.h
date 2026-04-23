@@ -40,6 +40,7 @@ struct Graph {
     std::vector<Edge> edges;
     LayoutOptions options;
     std::unordered_map<std::string, size_t> index;
+    std::vector<std::string> inputNodes;
     std::ostringstream log;
 };
 
