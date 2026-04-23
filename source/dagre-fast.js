@@ -4,7 +4,38 @@ const dagre = {};
 // Simplified DFS-based layout: rank + column assigned in one pass, no ordering phase.
 
 dagre.layout = (nodes, edges, layout, state) => {
+    const blockMode =
+        layout && typeof layout.blockMode === 'string' ? layout.blockMode : 'off';
+    const blockDebug = Boolean(layout && layout.blockDebug);
+    const blockSymmetryWeight =
+        layout && Number.isFinite(layout.blockSymmetryWeight)
+            ? layout.blockSymmetryWeight
+            : 1;
+    const blockMaxDepth =
+        layout && Number.isFinite(layout.blockMaxDepth)
+            ? layout.blockMaxDepth
+            : Infinity;
+    const blockConfig = {
+        mode: blockMode,
+        debug: blockDebug,
+        symmetryWeight: blockSymmetryWeight,
+        maxDepth: blockMaxDepth,
+    };
+    void blockConfig;
+    if (blockDebug) {
+        state.layoutDebug = state.layoutDebug || {};
+        if (!Array.isArray(state.layoutDebug.blocks)) {
+            state.layoutDebug.blocks = [];
+        }
+    }
+
     // ----- helpers -----
+    const debug = false;
+    const debugLog = (...args) => {
+        if (debug) {
+            console.log(...args);
+        }
+    };
 
     // ----- build adjacency structures from flat arrays -----
 
@@ -94,7 +125,7 @@ dagre.layout = (nodes, edges, layout, state) => {
     // Assign rank: for each node in topo order,
     // rank = max(predecessor ranks + effective minlen)
     // Sources get rank 0.
-    console.log('[dagre-fast] === Step 1: Rank Assignment ===');
+    debugLog('[dagre-fast] === Step 1: Rank Assignment ===');
     for (const v of topoOrder) {
         const node = nodeMap.get(v);
         if (node.inEdges.length === 0) {
@@ -112,113 +143,35 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
             node.rank = Math.max(0, maxPredRank);
         }
-        console.log(`  rank[${node.title || node.v}] (v=${JSON.stringify(v)}) = ${node.rank}, inEdges=[${node.inEdges}], outEdges=[${node.outEdges}]`);
+        debugLog(`  rank[${node.title || node.v}] (v=${JSON.stringify(v)}) = ${node.rank}, inEdges=[${node.inEdges}], outEdges=[${node.outEdges}]`);
     }
 
-    // ----- insert virtual (dummy) nodes for long edges (span >= 2) -----
-    // For an edge A->C where C.rank - A.rank >= 2, insert virtual nodes at
-    // each intermediate rank so the edge becomes A->V1->V2->...->C.
-    // Virtual nodes participate in column assignment.
-    // Their top-mid / bottom-mid points are later used as edge waypoints.
-
-    console.log('[dagre-fast] === Step 2: Virtual Node Insertion ===');
-    let virtualIdCounter = 0;
-    const virtualNodeId = () => `\x00virt_${virtualIdCounter++}`;
-    // Map: original edge key -> array of virtual node ids (in rank order)
+    // Record long-edge intermediate ranks. Virtual nodes are synthesized later
+    // (after rank pull and final coordinate assignment) only for edge routing,
+    // so they do not affect rank/column optimization.
+    debugLog('[dagre-fast] === Step 2: Long Edge Registration ===');
     const edgeVirtualChain = new Map();
-
-    // We need to process edges that span >= 2 ranks.
-    // Use a snapshot of the current edges list (it may grow as we split).
-    const originalEdges = edges.slice();
-    for (const edge of originalEdges) {
+    for (const edge of edges) {
         const srcNode = nodeMap.get(edge.v);
         const tgtNode = nodeMap.get(edge.w);
-        if (!srcNode || !tgtNode) continue;
-        const span = tgtNode.rank - srcNode.rank;
-        if (span < 2) continue;
-
-        // 对于纯链路单边（src 只有这一条出边，tgt 只有这一条入边），
-        // 不插入虚拟节点。此类长跨度通常来自 edge label 的 minlen 拉伸，
-        // 仅用于留标签空间，不需要作为真实中间占位节点参与布局。
-        const isSingleChainEdge = srcNode.outEdges.length === 1 && tgtNode.inEdges.length === 1;
-        if (isSingleChainEdge) {
-            console.log(`  Skip long edge ${JSON.stringify(edge.v)}->${JSON.stringify(edge.w)} span=${span}: single-chain label edge`);
+        if (!srcNode || !tgtNode) {
             continue;
         }
-
-        // Determine which intermediate ranks need virtual nodes.
-        // If any intermediate rank already has a real node sitting between
-        // src and tgt in the topo order, skip virtual insertion for that rank
-        // (the edge already routes through that rank naturally).
-        const chain = []; // virtual node ids in ascending rank order
-        const ek = edgeKey(edge.v, edge.w);
-        const minlen = edgeMinlen.get(ek) || 1;
-
+        const span = tgtNode.rank - srcNode.rank;
+        if (span < 2) {
+            continue;
+        }
+        const chainRanks = [];
         for (let r = srcNode.rank + 1; r < tgtNode.rank; r++) {
-            // Insert a virtual node at this intermediate rank
-            const vid = virtualNodeId();
-            const vNode = {
-                v: vid,
-                name: '',
-                title: '',
-                tensor: '',
-                identifier: '',
-                type: 'virtual',
-                width: 0,
-                height: 0,
-                inEdges: [],
-                outEdges: [],
-                rank: r,
-                col: undefined,
-                x: undefined,
-                y: undefined
-            };
-            nodeMap.set(vid, vNode);
-            chain.push(vid);
-
-            // Add to topoOrder at the correct position (after any node with rank < r)
-            // We simply append; topoOrder is only used for iteration order, and
-            // since rank is already assigned, the exact position doesn't matter.
-            topoOrder.push(vid);
+            chainRanks.push(r);
         }
-
-        if (chain.length === 0) continue;
-
-        edgeVirtualChain.set(ek, chain);
-
-        // Update adjacency: build the chain A -> V1 -> V2 -> ... -> C
-        // Remove original edge from adjacency lists
-        const srcOutIdx = srcNode.outEdges.indexOf(edge.w);
-        if (srcOutIdx !== -1) srcNode.outEdges.splice(srcOutIdx, 1);
-        const tgtInIdx = tgtNode.inEdges.indexOf(edge.v);
-        if (tgtInIdx !== -1) tgtNode.inEdges.splice(tgtInIdx, 1);
-
-        // A -> V1
-        srcNode.outEdges.push(chain[0]);
-        nodeMap.get(chain[0]).inEdges.push(edge.v);
-
-        // Vi -> Vi+1
-        for (let i = 0; i < chain.length - 1; i++) {
-            nodeMap.get(chain[i]).outEdges.push(chain[i + 1]);
-            nodeMap.get(chain[i + 1]).inEdges.push(chain[i]);
+        if (chainRanks.length > 0) {
+            edgeVirtualChain.set(edgeKey(edge.v, edge.w), chainRanks);
+            debugLog(`  Long edge ${JSON.stringify(edge.v)}->${JSON.stringify(edge.w)} span=${span}: registered virtual ranks [${chainRanks.join(',')}]`);
         }
-
-        // Vlast -> C
-        nodeMap.get(chain[chain.length - 1]).outEdges.push(edge.w);
-        tgtNode.inEdges.push(chain[chain.length - 1]);
-
-        // Update edgeMinlen for the chain segments (all 1, except possibly the first
-        // which inherits the original minlen - 1 for each virtual hop).
-        // Simplified: all chain segments have minlen 1.
-        edgeMinlen.set(edgeKey(edge.v, chain[0]), 1);
-        for (let i = 0; i < chain.length - 1; i++) {
-            edgeMinlen.set(edgeKey(chain[i], chain[i + 1]), 1);
-        }
-        edgeMinlen.set(edgeKey(chain[chain.length - 1], edge.w), 1);
-        console.log(`  Long edge ${JSON.stringify(edge.v)}->${JSON.stringify(edge.w)} span=${span}: inserted ${chain.length} virtual nodes at ranks [${chain.map((vid, i) => srcNode.rank + 1 + i).join(',')}]`);
     }
     if (edgeVirtualChain.size === 0) {
-        console.log('  No long edges found (all spans < 2)');
+        debugLog('  No long edges found (all spans < 2)');
     }
 
     // Assign col: process nodes rank by rank
@@ -239,10 +192,10 @@ dagre.layout = (nodes, edges, layout, state) => {
     }
 
     // For rank 0: assign sequential columns
-    console.log('[dagre-fast] === Step 3: Column Assignment ===');
-    console.log(`  maxRank=${maxRank}`);
+    debugLog('[dagre-fast] === Step 3: Column Assignment ===');
+    debugLog(`  maxRank=${maxRank}`);
     for (let r = 0; r <= maxRank; r++) {
-        console.log(`  rank ${r}: [${nodesByRank[r].map(v => {
+        debugLog(`  rank ${r}: [${nodesByRank[r].map(v => {
             const n = nodeMap.get(v);
             return `${n.title||n.type}[${JSON.stringify(v)}]`;
         }).join(', ')}]`);
@@ -326,7 +279,7 @@ dagre.layout = (nodes, edges, layout, state) => {
             }
         }
         resolveRankCollisions(r);
-        console.log(`  rank ${r} after assign+resolve: ${nodesByRank[r].map(v => {
+        debugLog(`  rank ${r} after assign+resolve: ${nodesByRank[r].map(v => {
             const n = nodeMap.get(v);
             return `${n.title||n.type}[${JSON.stringify(v)}].col=${n.col?.toFixed(2)}`;
         }).join(', ')}`);
@@ -472,9 +425,9 @@ dagre.layout = (nodes, edges, layout, state) => {
         );
     }
 
-    console.log('[dagre-fast] === Step 4: Col After Lantern Spreading ===');
+    debugLog('[dagre-fast] === Step 4: Col After Lantern Spreading ===');
     for (let r = 0; r <= maxRank; r++) {
-        console.log(`  rank ${r}: ${nodesByRank[r].map(v => {
+        debugLog(`  rank ${r}: ${nodesByRank[r].map(v => {
             const n = nodeMap.get(v);
             return `${n.title||n.type}[${JSON.stringify(v)}].col=${n.col?.toFixed(2)}`;
         }).join(', ')}`);
@@ -594,10 +547,147 @@ dagre.layout = (nodes, edges, layout, state) => {
             rankY = Math.max(rankY, minGapY);
         }
         rankCandidateY[r] = rankY;
-        console.log(`  rankY[${r}] = ${rankY.toFixed(1)} (maxHeight=${maxHeight.toFixed(1)}, nodes=${list.length})`);
+        debugLog(`  rankY[${r}] = ${rankY.toFixed(1)} (maxHeight=${maxHeight.toFixed(1)}, nodes=${list.length})`);
 
         for (const v of list) {
             yByNode.set(v, rankY);
+        }
+    }
+
+    // Bidirectional pull pass:
+    // 1) forward scan (producer -> consumer): pull consumers upward (toward producer)
+    // 2) backward scan (consumer -> producer): pull producers downward (toward user)
+    const pullPasses = 2;
+    const pullAlphaForward = 0.45;
+    const pullAlphaBackward = 0.35;
+    const maxShiftPerPass = 14;
+    const rankRelaxedY = rankCandidateY.slice();
+    const clampShift = (current, target) => {
+        const delta = Math.max(-maxShiftPerPass, Math.min(maxShiftPerPass, target - current));
+        return current + delta;
+    };
+
+    for (let pass = 0; pass < pullPasses; pass++) {
+        // Forward: pull successors up.
+        for (let r = 1; r <= maxRank; r++) {
+            const list = nodesByRank[r] || [];
+            let lowerBound = -Infinity;
+            for (const v of list) {
+                const node = nodeMap.get(v);
+                if (!node) {
+                    continue;
+                }
+                for (const pred of node.inEdges) {
+                    const predNode = nodeMap.get(pred);
+                    if (!predNode) {
+                        continue;
+                    }
+                    const predY = rankRelaxedY[predNode.rank];
+                    if (!Number.isFinite(predY)) {
+                        continue;
+                    }
+                    const candidate =
+                        predY + (predNode.height || 0) / 2 + edgeClearGap(pred, v) + (node.height || 0) / 2;
+                    if (candidate > lowerBound) {
+                        lowerBound = candidate;
+                    }
+                }
+            }
+            if (Number.isFinite(lowerBound) && rankRelaxedY[r] > lowerBound + 1e-6) {
+                const target = rankRelaxedY[r] - (rankRelaxedY[r] - lowerBound) * pullAlphaForward;
+                rankRelaxedY[r] = clampShift(rankRelaxedY[r], target);
+            }
+        }
+
+        // Backward: pull predecessors down (toward user).
+        for (let r = maxRank - 1; r >= 0; r--) {
+            const list = nodesByRank[r] || [];
+            let upperBound = Infinity;
+            for (const v of list) {
+                const node = nodeMap.get(v);
+                if (!node) {
+                    continue;
+                }
+                for (const succ of node.outEdges) {
+                    const succNode = nodeMap.get(succ);
+                    if (!succNode) {
+                        continue;
+                    }
+                    const succY = rankRelaxedY[succNode.rank];
+                    if (!Number.isFinite(succY)) {
+                        continue;
+                    }
+                    const candidate =
+                        succY - (node.height || 0) / 2 - edgeClearGap(v, succ) - (succNode.height || 0) / 2;
+                    if (candidate < upperBound) {
+                        upperBound = candidate;
+                    }
+                }
+            }
+            if (Number.isFinite(upperBound) && rankRelaxedY[r] < upperBound - 1e-6) {
+                const target = rankRelaxedY[r] + (upperBound - rankRelaxedY[r]) * pullAlphaBackward;
+                rankRelaxedY[r] = clampShift(rankRelaxedY[r], target);
+            }
+        }
+    }
+
+    for (let r = 0; r <= maxRank; r++) {
+        const list = nodesByRank[r] || [];
+        for (const v of list) {
+            yByNode.set(v, rankRelaxedY[r]);
+        }
+    }
+
+    // Per-source pull-down:
+    // rank-level relaxation keeps all rank-0 sources together, which can leave
+    // long-range constant sources far from their users. Pull each source node
+    // individually toward the nearest legal position before its consumers.
+    const sourcePullThreshold = 400;
+    const sourcePullAlpha = 1.0;
+    const resolveTerminalSuccessor = (startId) => {
+        let currentId = startId;
+        const visited = new Set();
+        while (currentId && !visited.has(currentId)) {
+            visited.add(currentId);
+            const n = nodeMap.get(currentId);
+            if (!n) {
+                return null;
+            }
+            if (n.type !== 'virtual') {
+                return n;
+            }
+            if (!Array.isArray(n.outEdges) || n.outEdges.length === 0) {
+                return n;
+            }
+            currentId = n.outEdges[0];
+        }
+        return null;
+    };
+
+    for (const node of nodeMap.values()) {
+        if (!node || node.inEdges.length !== 0 || node.outEdges.length === 0) {
+            continue;
+        }
+        const currentY = yByNode.get(node.v);
+        if (!Number.isFinite(currentY)) {
+            continue;
+        }
+        let upperBound = Infinity;
+        for (const succ of node.outEdges) {
+            const succNode = resolveTerminalSuccessor(succ);
+            const succY = succNode ? yByNode.get(succNode.v) : undefined;
+            if (!succNode || !Number.isFinite(succY)) {
+                continue;
+            }
+            const candidate =
+                succY - (node.height || 0) / 2 - edgeClearGap(node.v, succNode.v) - (succNode.height || 0) / 2;
+            if (candidate < upperBound) {
+                upperBound = candidate;
+            }
+        }
+        if (Number.isFinite(upperBound) && upperBound - currentY > sourcePullThreshold) {
+            const nextY = currentY + (upperBound - currentY) * sourcePullAlpha;
+            yByNode.set(node.v, Math.min(nextY, upperBound));
         }
     }
 
@@ -618,11 +708,11 @@ dagre.layout = (nodes, edges, layout, state) => {
         node.y = yByNode.get(node.v) || node.height / 2;
     }
 
-    console.log('[dagre-fast] === Step 5: Final Pixel Coordinates ===');
+    debugLog('[dagre-fast] === Step 5: Final Pixel Coordinates ===');
     for (const [v, node] of nodeMap) {
-        console.log(`  ${node.title||node.type}[${JSON.stringify(v)}]: x=${node.x.toFixed(1)}, y=${node.y.toFixed(1)}, w=${node.width}, h=${node.height}`);
+        debugLog(`  ${node.title||node.type}[${JSON.stringify(v)}]: x=${node.x.toFixed(1)}, y=${node.y.toFixed(1)}, w=${node.width}, h=${node.height}`);
     }
-    console.log(`  minCol=${minCol}, maxCol=${maxCol}, colX=[${colX.map(c=>c.toFixed(1)).join(',')}]`);
+    debugLog(`  minCol=${minCol}, maxCol=${maxCol}, colX=[${colX.map(c=>c.toFixed(1)).join(',')}]`);
 
     // ----- handle coordinate direction -----
 
@@ -859,11 +949,10 @@ dagre.layout = (nodes, edges, layout, state) => {
         const dy = tgtCenter.y - srcCenter.y;
         const sourcePortX = outputPortX.get(edgeKey(edge.v, edge.w)) ?? srcCenter.x;
 
-        // ----- use virtual nodes as edge waypoints -----
-        // If this edge has a virtual chain (inserted during long-edge splitting),
-        // build the path as src -> (bottom-mid of each virtual) -> tgt using
-        // the virtual node coordinates.  The renderer will connect these points
-        // with bezier curves, producing clean straight-ish routes for long edges.
+        // ----- use virtual waypoints as edge guidance -----
+        // Virtual waypoints are synthesized from intermediate ranks after rank
+        // relaxation is complete, so they guide edge shape without affecting
+        // rank/column optimization.
         const ek = edgeKey(edge.v, edge.w);
         const vChain = edgeVirtualChain.get(ek);
         if (vChain && vChain.length > 0) {
@@ -879,9 +968,23 @@ dagre.layout = (nodes, edges, layout, state) => {
                 direction > 0
                     ? tgtCenter.y - tgtNode.height / 2 - approachLift
                     : tgtCenter.y + tgtNode.height / 2 + approachLift;
+            const rankSpan = Math.max(1, (tgtNode.rank || 0) - (srcNode.rank || 0));
             const virtualPoints = vChain
-                .map((vid) => nodeMap.get(vid))
-                .filter((n) => !!n && Number.isFinite(n.x) && Number.isFinite(n.y));
+                .map((rank) => {
+                    const t = ((rank || 0) - (srcNode.rank || 0)) / rankSpan;
+                    const top = rankBandTop.get(rank);
+                    const bottom = rankBandBottom.get(rank);
+                    const y =
+                        Number.isFinite(top) && Number.isFinite(bottom)
+                            ? (top + bottom) / 2
+                            : srcCenter.y + (tgtCenter.y - srcCenter.y) * t;
+                    return {
+                        rank,
+                        x: srcCenter.x + (tgtCenter.x - srcCenter.x) * t,
+                        y,
+                    };
+                })
+                .filter((n) => Number.isFinite(n.x) && Number.isFinite(n.y));
             const first = virtualPoints.length > 0 ? virtualPoints[0] : null;
             const last = virtualPoints.length > 0 ? virtualPoints[virtualPoints.length - 1] : null;
             const firstY = first && Number.isFinite(rankBandTop.get(first.rank)) ? rankBandTop.get(first.rank) : (first ? first.y : NaN);
@@ -1009,14 +1112,14 @@ dagre.layout = (nodes, edges, layout, state) => {
 
     void inputPortDebug;
 
-    console.log('[dagre-fast] === Step 6: Edge Paths ===');
+    debugLog('[dagre-fast] === Step 6: Edge Paths ===');
     for (const edge of edges) {
         const srcNode = nodeMap.get(edge.v);
         const tgtNode = nodeMap.get(edge.w);
         if (!srcNode || !tgtNode) continue;
         const ek = edgeKey(edge.v, edge.w);
         const vChain = edgeVirtualChain.get(ek);
-        console.log(`  Edge ${srcNode.title||srcNode.v}[${JSON.stringify(edge.v)}] -> ${tgtNode.title||tgtNode.v}[${JSON.stringify(edge.w)}]: ${edge.points?.length || 0} pts${vChain ? ` (virtual chain: ${vChain.length})` : ''}`);
+        debugLog(`  Edge ${srcNode.title||srcNode.v}[${JSON.stringify(edge.v)}] -> ${tgtNode.title||tgtNode.v}[${JSON.stringify(edge.w)}]: ${edge.points?.length || 0} pts${vChain ? ` (virtual chain: ${vChain.length})` : ''}`);
     }
 
     // ----- write results back to nodes/edges arrays -----
@@ -1099,12 +1202,12 @@ dagre.layout = (nodes, edges, layout, state) => {
         state.height = maxY - minY;
     }
 
-    console.log('[dagre-fast] === Step 7: Final Output (nodes array) ===');
+    debugLog('[dagre-fast] === Step 7: Final Output (nodes array) ===');
     for (const node of nodes) {
-        console.log(`  ${node.title||node.v}[${JSON.stringify(node.v)}]: x=${node.x?.toFixed(1)}, y=${node.y?.toFixed(1)}`);
+        debugLog(`  ${node.title||node.v}[${JSON.stringify(node.v)}]: x=${node.x?.toFixed(1)}, y=${node.y?.toFixed(1)}`);
     }
-    console.log(`  Canvas: ${state.width?.toFixed(0)} x ${state.height?.toFixed(0)}`);
-    console.log('[dagre-fast] === Done ===\n');
+    debugLog(`  Canvas: ${state.width?.toFixed(0)} x ${state.height?.toFixed(0)}`);
+    debugLog('[dagre-fast] === Done ===\n');
 
     state.log = "";
 };

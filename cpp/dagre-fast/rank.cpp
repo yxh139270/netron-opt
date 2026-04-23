@@ -1,6 +1,7 @@
 #include "rank.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <queue>
 #include <vector>
 
@@ -69,6 +70,25 @@ void assign_rank(Graph& graph) {
             best = std::max(best, candidate);
         }
         graph.nodes[id].rank = best;
+    }
+
+    auto reverseTopo = topo;
+    std::reverse(reverseTopo.begin(), reverseTopo.end());
+    for (const auto id : reverseTopo) {
+        int best = graph.nodes[id].rank;
+        int changeBest = INT32_MAX;
+        for (const auto& edge : graph.edges) {
+            if (edge.v != graph.nodes[id].v) {
+                continue;
+            }
+            const auto itW = graph.index.find(edge.w);
+            if (itW == graph.index.end()) {
+                continue;
+            }
+            const int candidate = graph.nodes[itW->second].rank - std::max(1, edge.minlen);
+            changeBest = std::min(changeBest, candidate);
+        }
+        graph.nodes[id].rank = std::max(best, changeBest);
     }
 }
 
