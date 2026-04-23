@@ -558,6 +558,10 @@ mycelium.Graph = class {
         const layout = {};
         layout.nodesep = 20;
         layout.ranksep = 20;
+        const requestedLayoutEngine = String((options && options.layoutEngine) || (this.options && (this.options.layoutEngine || this.options.orderEngine)) || 'dagre-order').toLowerCase();
+        const requestedFastEngine = String((options && options.fastEngine) || (this.options && this.options.fastEngine) || 'js').toLowerCase();
+        layout.layoutEngine = requestedLayoutEngine;
+        layout.fastEngine = requestedFastEngine;
         const direction = this.options.direction;
         const rotate = edges.length === 0 ? direction === 'vertical' : direction !== 'vertical';
         if (rotate) {
@@ -579,7 +583,7 @@ mycelium.Graph = class {
                 // ignore dump errors
             }
         }
-        const layoutEngine = String((this.options && (this.options.layoutEngine || this.options.orderEngine)) || layout.layoutEngine || layout.orderEngine || 'dagre-order').toLowerCase();
+        const layoutEngine = String(layout.layoutEngine || layout.orderEngine || 'dagre-order').toLowerCase();
         if (worker) {
             const message = await worker.request({ type: 'dagre.layout', nodes, edges, layout, state }, 2500, 'This large graph layout might take a very long time to complete.');
             if (message.type === 'cancel' || message.type === 'terminate') {
@@ -588,15 +592,11 @@ mycelium.Graph = class {
             nodes = message.nodes;
             edges = message.edges;
             state.log = message.state.log;
-        } else if (layoutEngine === 'dagre') {
-            const dagre = await import('./dagre.js');
-            dagre.layout(nodes, edges, layout, state);
-        } else if (layoutEngine === 'dagre-fast') {
-            const dagre = await import('./dagre-fast.js');
-            dagre.layout(nodes, edges, layout, state);
         } else {
-            const dagre = await import('./dagre-order.js');
-            dagre.layout(nodes, edges, layout, state);
+            const selector = await import('./dagre-engine.js');
+            const modulePath = selector.resolveDagreModulePath(layout);
+            const dagre = await import(modulePath);
+            await dagre.layout(nodes, edges, layout, state);
         }
         if (layoutEngine === 'dagre-order' && state.log && globalThis.console && typeof globalThis.console.log === 'function') {
             globalThis.console.log(`[dagre-order-rs] stage_ms ${state.log}`);

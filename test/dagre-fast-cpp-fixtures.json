@@ -1,0 +1,66 @@
+[
+  {
+    "name": "chain",
+    "nodes": [
+      { "v": "A", "width": 100, "height": 40 },
+      { "v": "B", "width": 100, "height": 40 },
+      { "v": "C", "width": 100, "height": 40 }
+    ],
+    "edges": [
+      { "v": "A", "w": "B" },
+      { "v": "B", "w": "C" }
+    ],
+    "layout": { "rankdir": "TB" }
+  },
+  {
+    "name": "diamond",
+    "nodes": [
+      { "v": "s", "width": 100, "height": 40 },
+      { "v": "a", "width": 100, "height": 40 },
+      { "v": "b", "width": 100, "height": 40 },
+      { "v": "t", "width": 100, "height": 40 }
+    ],
+    "edges": [
+      { "v": "s", "w": "a" },
+      { "v": "s", "w": "b" },
+      { "v": "a", "w": "t" },
+      { "v": "b", "w": "t" }
+    ],
+    "layout": { "rankdir": "TB" }
+  },
+  {
+    "name": "long-edge",
+    "nodes": [
+      { "v": "A", "width": 100, "height": 40 },
+      { "v": "B", "width": 100, "height": 40 },
+      { "v": "C", "width": 100, "height": 40 }
+    ],
+    "edges": [
+      { "v": "A", "w": "B" },
+      { "v": "B", "w": "C" },
+      { "v": "A", "w": "C" }
+    ],
+    "layout": { "rankdir": "TB" }
+  },
+  {
+    "name": "multi-branch",
+    "nodes": [
+      { "v": "s", "width": 100, "height": 40 },
+      { "v": "a", "width": 100, "height": 40 },
+      { "v": "b", "width": 100, "height": 40 },
+      { "v": "c", "width": 100, "height": 40 },
+      { "v": "d", "width": 100, "height": 40 },
+      { "v": "t", "width": 100, "height": 40 }
+    ],
+    "edges": [
+      { "v": "s", "w": "a" },
+      { "v": "s", "w": "b" },
+      { "v": "a", "w": "c" },
+      { "v": "b", "w": "d" },
+      { "v": "c", "w": "t" },
+      { "v": "d", "w": "t" },
+      { "v": "s", "w": "t" }
+    ],
+    "layout": { "rankdir": "TB" }
+  }
+]

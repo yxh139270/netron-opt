@@ -266,6 +266,11 @@ const build = async (target) => {
             } else {
                 writeLine('skip dagre-order-rs wasm (set NETRON_BUILD_DAGRE_RS=1 to enable)');
             }
+            if (process.env.NETRON_BUILD_DAGRE_FAST_CPP === '1') {
+                await exec('bash tools/build-dagre-fast-cpp.sh');
+            } else {
+                writeLine('skip dagre-fast-cpp wasm (set NETRON_BUILD_DAGRE_FAST_CPP=1 to enable)');
+            }
             writeLine('cp source/dir dist/dir');
             const source_dir = dirname('source');
             const dist_dir = dirname('dist', 'web');
