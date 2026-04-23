@@ -69,7 +69,7 @@ void assign_rank(Graph& graph) {
             if (itV == graph.index.end()) {
                 continue;
             }
-            const int candidate = graph.nodes[itV->second].rank + std::max(1, edge.minlen);
+            const int candidate = graph.nodes[itV->second].rank + 1;
             best = std::max(best, candidate);
         }
         graph.nodes[id].rank = best;
@@ -90,7 +90,7 @@ void assign_rank(Graph& graph) {
             if (itW == graph.index.end()) {
                 continue;
             }
-            const int candidate = graph.nodes[itW->second].rank - std::max(1, edge.minlen);
+            const int candidate = graph.nodes[itW->second].rank - 1;
             changeBest = std::min(changeBest, candidate);
         }
         int oldRank = graph.nodes[id].rank;

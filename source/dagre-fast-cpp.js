@@ -58,20 +58,19 @@ const _copyLayoutResult = (nodes, edges, parsed) => {
         if (!out) {
             continue;
         }
-        for (const key of Object.keys(out)) {
-            node[key] = out[key];
-        }
+        node.x = out.x;
+        node.y = out.y;
     }
 
     const edgeByKey = new Map((parsed.edges || []).map((edge) => [`${edge.v}->${edge.w}`, edge]));
     for (const edge of edges || []) {
         const out = edgeByKey.get(`${edge.v}->${edge.w}`);
         if (!out) {
+            // Ensure every edge has at least a minimal set of points
+            edge.points = edge.points || [];
             continue;
         }
-        for (const key of Object.keys(out)) {
-            edge[key] = out[key];
-        }
+        edge.points = out.points || [];
     }
 };
 
@@ -91,6 +90,7 @@ const _applyMeta = (state, parsed) => {
 
 export const layout = async (nodes, edges, layoutOptions, state) => {
     const fallback = async (reason) => {
+        console.warn('[dagre-fast-cpp] Falling back to JS:', reason);
         const dagre = await import('./dagre-fast.js');
         dagre.layout(nodes, edges, layoutOptions || {}, state || {});
         if (state) {
@@ -111,10 +111,14 @@ export const layout = async (nodes, edges, layoutOptions, state) => {
 
     try {
         const wasm = await _loadModule();
+        console.log('[dagre-fast-cpp] WASM module loaded successfully');
         const fn = wasm.cwrap('layout_json', 'number', ['string']);
         const freeFn = wasm.cwrap('free_json', null, ['number']);
-        const ptr = fn(JSON.stringify(payload));
+        const inputJson = JSON.stringify(payload);
+        console.log('[dagre-fast-cpp] Input: nodes=' + (nodes||[]).length + ' edges=' + (edges||[]).length + ' json_len=' + inputJson.length);
+        const ptr = fn(inputJson);
         const output = wasm.UTF8ToString(ptr);
+        console.log('[dagre-fast-cpp] Output length=' + output.length + ' first200=' + output.substring(0, 200));
         freeFn(ptr);
 
         let parsed = null;

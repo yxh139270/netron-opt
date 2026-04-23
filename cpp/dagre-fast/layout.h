@@ -20,12 +20,12 @@ struct Node {
     double col = 0;
     double x = 0;
     double y = 0;
+    bool isVirtual = false;
 };
 
 struct Edge {
     std::string v;
     std::string w;
-    int minlen = 1;
     std::vector<Point> points;
 };
 

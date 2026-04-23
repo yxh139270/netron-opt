@@ -2,6 +2,7 @@
 
 #include "column.h"
 #include "coord.h"
+#include "edge.h"
 #include "json_io.h"
 #include "rank.h"
 #include "route.h"
@@ -20,11 +21,14 @@ bool run_layout(Graph& graph, Meta& meta) {
     const auto t0 = Clock::now();
     assign_rank(graph);
     const auto t1 = Clock::now();
+    insert_virtual_nodes(graph);
+    const auto t1b = Clock::now();
     assign_column(graph);
     const auto t2 = Clock::now();
     assign_coord(graph);
     const auto t3 = Clock::now();
     route_edges(graph);
+    collapse_virtual_nodes(graph);
     const auto t4 = Clock::now();
 
     const auto ms = [](Clock::time_point a, Clock::time_point b) {
@@ -33,7 +37,8 @@ bool run_layout(Graph& graph, Meta& meta) {
 
     std::ostringstream ss;
     ss << "rank=" << ms(t0, t1)
-       << ",column=" << ms(t1, t2)
+       << ",virtual=" << ms(t1, t1b)
+       << ",column=" << ms(t1b, t2)
        << ",coord=" << ms(t2, t3)
        << ",route=" << ms(t3, t4);
     meta.stage_ms = ss.str();

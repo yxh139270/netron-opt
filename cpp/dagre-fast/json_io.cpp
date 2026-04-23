@@ -239,15 +239,6 @@ bool parse_edge_object(JsonScanner& s, Edge& edge) {
             if (!s.parse_string(edge.w)) {
                 return false;
             }
-        } else if (key == "minlen") {
-            double value = 1;
-            if (!s.parse_number(value)) {
-                return false;
-            }
-            edge.minlen = static_cast<int>(value);
-            if (edge.minlen < 1) {
-                edge.minlen = 1;
-            }
         } else {
             if (!s.skip_value()) {
                 return false;
