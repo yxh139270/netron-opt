@@ -134,6 +134,9 @@ export const layout = async (nodes, edges, layoutOptions, state) => {
 
         _copyLayoutResult(nodes, edges, parsed);
         _applyMeta(state, parsed);
+        if (parsed.meta && parsed.meta.log) {
+            console.log('[dagre-fast-cpp] C++ log:\n' + parsed.meta.log);
+        }
         if (!_hasFiniteNodeCoords(nodes)) {
             await fallback('missing-node-coordinates');
         }

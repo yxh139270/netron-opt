@@ -56,6 +56,9 @@ void assign_rank(Graph& graph) {
         }
     }
 
+    graph.log << "[rank] === Rank Assignment ===\n";
+
+    // Forward pass: push rank down from predecessors
     for (const auto id : topo) {
         int best = 0;
         for (const auto& edge : graph.edges) {
@@ -70,8 +73,10 @@ void assign_rank(Graph& graph) {
             best = std::max(best, candidate);
         }
         graph.nodes[id].rank = best;
+        graph.log << "  [fwd] node=\"" << graph.nodes[id].v << "\" rank=" << graph.nodes[id].rank << "\n";
     }
 
+    // Backward pass: pull rank up toward successors
     auto reverseTopo = topo;
     std::reverse(reverseTopo.begin(), reverseTopo.end());
     for (const auto id : reverseTopo) {
@@ -88,8 +93,14 @@ void assign_rank(Graph& graph) {
             const int candidate = graph.nodes[itW->second].rank - std::max(1, edge.minlen);
             changeBest = std::min(changeBest, candidate);
         }
-        graph.nodes[id].rank = std::max(best, changeBest);
+        int oldRank = graph.nodes[id].rank;
+        if (changeBest != INT32_MAX) {
+            graph.nodes[id].rank = std::max(best, changeBest);
+        }
+        graph.log << "  [bwd] node=\"" << graph.nodes[id].v << "\" rank=" << oldRank << " -> " << graph.nodes[id].rank << "\n";
     }
+
+    graph.log << "[rank] === Rank Assignment Done ===\n";
 }
 
 } // namespace dagre_fast

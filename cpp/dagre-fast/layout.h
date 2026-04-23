@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -39,11 +40,13 @@ struct Graph {
     std::vector<Edge> edges;
     LayoutOptions options;
     std::unordered_map<std::string, size_t> index;
+    std::ostringstream log;
 };
 
 struct Meta {
     bool ok = true;
     std::string stage_ms;
+    std::string log;
 };
 
 bool run_layout(Graph& graph, Meta& meta);

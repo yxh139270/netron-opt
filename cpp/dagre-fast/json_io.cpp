@@ -397,7 +397,8 @@ std::string serialize_output_json(const Graph& graph, const Meta& meta) {
         out << "]}";
     }
     out << "],\"meta\":{\"ok\":" << (meta.ok ? "true" : "false")
-        << ",\"stage_ms\":\"" << escape_json(meta.stage_ms) << "\"}}";
+        << ",\"stage_ms\":\"" << escape_json(meta.stage_ms)
+        << "\",\"log\":\"" << escape_json(meta.log) << "\"}}";
     return out.str();
 }
 

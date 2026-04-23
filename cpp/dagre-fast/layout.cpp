@@ -37,6 +37,7 @@ bool run_layout(Graph& graph, Meta& meta) {
        << ",coord=" << ms(t2, t3)
        << ",route=" << ms(t3, t4);
     meta.stage_ms = ss.str();
+    meta.log = graph.log.str();
     meta.ok = true;
     return true;
 }
