@@ -9,7 +9,7 @@ namespace dagre_fast {
 
 struct Block {
     std::string id;
-    std::vector<std::string> nodes;
+    std::vector<std::vector<std::string>> pipeNodes;
     int colNum = 0;
 };
 

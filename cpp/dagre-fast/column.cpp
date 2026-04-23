@@ -50,47 +50,53 @@ std::map<std::string, std::vector<std::string>> buildPredecessors(const Graph& g
     return preds;
 }
 
-// Collect a single branch: follow single-successor chain starting from startId.
-// Stop at: fan-out (multiple successors), merge (multiple predecessors), visited node.
-// Returns node ids in the chain (including startId).
-std::vector<std::string> collectBranch(
-    const std::string& startId,
+// Infer merge node from a collected sub-block: take the last node of each
+// pipe, then find a common direct successor.
+std::string findMergeNodeFromSubBlock(
+    const std::string& blockId,
+    const std::map<std::string, Block>& blocks,
     const std::map<std::string, std::vector<std::string>>& succs,
-    const std::map<std::string, std::vector<std::string>>& preds,
-    std::set<std::string>& visited)
+    const std::map<std::string, std::vector<std::string>>& preds)
 {
-    std::vector<std::string> chain;
-    std::string current = startId;
-
-    while (true) {
-        if (visited.count(current)) {
-            break;
-        }
-        visited.insert(current);
-        chain.push_back(current);
-
-        const auto it = succs.find(current);
-        if (it == succs.end() || it->second.empty()) {
-            break;
-        }
-        if (it->second.size() > 1) {
-            // Fan-out: stop here, the fan-out node itself is in chain,
-            // its successors will be handled as sub-blocks.
-            break;
-        }
-
-        const std::string& next = it->second[0];
-
-        // Stop at merge points
-        const auto predIt = preds.find(next);
-        if (predIt != preds.end() && predIt->second.size() > 1) {
-            break;
-        }
-
-        current = next;
+    const auto blockIt = blocks.find(blockId);
+    if (blockIt == blocks.end() || blockIt->second.pipeNodes.empty()) {
+        return "";
     }
 
-    return chain;
+    std::string commonSucc;
+    for (const auto& pipe : blockIt->second.pipeNodes) {
+        if (pipe.empty()) {
+            return "";
+        }
+
+        const auto& tail = pipe.back();
+        const auto succIt = succs.find(tail);
+        if (succIt == succs.end() || succIt->second.empty()) {
+            return "";
+        }
+
+        std::string pipeMerge;
+        for (const auto& cand : succIt->second) {
+            const auto predIt = preds.find(cand);
+            if (predIt != preds.end() && predIt->second.size() > 1) {
+                pipeMerge = cand;
+                break;
+            }
+        }
+        if (pipeMerge.empty()) {
+            return "";
+        }
+
+        if (commonSucc.empty()) {
+            commonSucc = pipeMerge;
+            continue;
+        }
+        if (commonSucc != pipeMerge) {
+            return "";
+        }
+    }
+
+    return commonSucc;
 }
 
 // Calculate colNum for a block: range of cols spanned by its nodes,
@@ -99,12 +105,14 @@ int calcColNum(const Block& block, const Graph& graph) {
     double minCol = std::numeric_limits<double>::max();
     double maxCol = std::numeric_limits<double>::lowest();
 
-    for (const auto& nid : block.nodes) {
-        const auto idx = graph.index.find(nid);
-        if (idx != graph.index.end()) {
-            const double c = graph.nodes[idx->second].col;
-            minCol = std::min(minCol, c);
-            maxCol = std::max(maxCol, c);
+    for (const auto& pipe : block.pipeNodes) {
+        for (const auto& nid : pipe) {
+            const auto idx = graph.index.find(nid);
+            if (idx != graph.index.end()) {
+                const double c = graph.nodes[idx->second].col;
+                minCol = std::min(minCol, c);
+                maxCol = std::max(maxCol, c);
+            }
         }
     }
 
@@ -114,7 +122,7 @@ int calcColNum(const Block& block, const Graph& graph) {
 // Recursively collect blocks. Returns blocks keyed by their id.
 // Each fan-out node gets a block per successor branch. If a branch
 // itself contains a fan-out, that fan-out node gets its own blocks too.
-void collectBlocksRecursive(
+std::string collectBlocksRecursive(
     const std::string& fanoutNodeId,
     const std::map<std::string, std::vector<std::string>>& succs,
     const std::map<std::string, std::vector<std::string>>& preds,
@@ -124,38 +132,74 @@ void collectBlocksRecursive(
 {
     const auto it = succs.find(fanoutNodeId);
     if (it == succs.end() || it->second.size() <= 1) {
-        return;
+        return "";
     }
 
+    Block block;
+    block.id = fanoutNodeId + ":" + std::to_string(it->second.size());
     for (size_t i = 0; i < it->second.size(); i++) {
         const auto& succId = it->second[i];
         if (visited.count(succId)) {
             continue;
         }
 
-        Block block;
-        block.id = fanoutNodeId + ":" + std::to_string(i);
-        block.nodes = collectBranch(succId, succs, preds, visited);
+        block.pipeNodes.push_back({});
+        auto& pipe = block.pipeNodes.back();
+        std::string current = succId;
 
-        for (const auto& nid : block.nodes) {
-            const auto succIt = succs.find(nid);
-            if (succIt != succs.end() && succIt->second.size() > 1) {
-                collectBlocksRecursive(nid, succs, preds, visited, graph, result);
+        while (true) {
+            if (visited.count(current)) {
+                break;
             }
+            visited.insert(current);
+            pipe.push_back(current);
+
+            const auto it = succs.find(current);
+            if (it == succs.end() || it->second.empty()) {
+                break;
+            }
+            if (it->second.size() > 1) {
+                // Fan-out: stop here, the fan-out node itself is in chain,
+                // its successors will be handled as sub-blocks.
+                const auto curBlockId = collectBlocksRecursive(current, succs, preds, visited, graph, result);
+                if (!curBlockId.empty()) {
+                    pipe.push_back(curBlockId);
+                }
+                const auto mergeNode = findMergeNodeFromSubBlock(curBlockId, result, succs, preds);
+                if (mergeNode.empty()) {
+                    break;
+                }
+                current = mergeNode;
+                continue;
+            }
+
+            const std::string& next = it->second[0];
+
+            // Stop at merge points
+            const auto predIt = preds.find(next);
+            if (predIt != preds.end() && predIt->second.size() > 1) {
+                break;
+            }
+
+            current = next;
         }
-
-        block.colNum = calcColNum(block, graph);
-
-        graph.log << "  block id=" << block.id << " colNum=" << block.colNum
-                  << " nodes=" << block.nodes.size() << " [";
-        for (size_t j = 0; j < block.nodes.size(); j++) {
-            if (j > 0) graph.log << ",";
-            graph.log << block.nodes[j];
-        }
-        graph.log << "]\n";
-
-        result[block.id] = std::move(block);
     }
+    block.colNum = calcColNum(block, graph);
+
+    graph.log << "  block id=" << block.id << " colNum=" << block.colNum
+              << " pipes=" << block.pipeNodes.size() << " [";
+    for (size_t i = 0; i < block.pipeNodes.size(); i++) {
+        if (i > 0) graph.log << ";";
+        graph.log << "pipe" << i << "=";
+        for (size_t j = 0; j < block.pipeNodes[i].size(); j++) {
+            if (j > 0) graph.log << ",";
+            graph.log << block.pipeNodes[i][j];
+        }
+    }
+    graph.log << "]\n";
+
+    result[block.id] = std::move(block);
+    return block.id;
 }
 
 } // anonymous namespace
