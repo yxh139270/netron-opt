@@ -15,6 +15,6 @@ struct Block {
 
 void assign_column(Graph& graph);
 
-std::map<std::string, Block> collectBlocks(Graph& graph);
+std::map<std::string, Block> collectBlocks(Graph& graph, std::map<std::string, std::string>& nodeBlockId);
 
 } // namespace dagre_fast

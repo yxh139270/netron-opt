@@ -101,22 +101,19 @@ std::string findMergeNodeFromSubBlock(
 
 // Calculate colNum for a block: range of cols spanned by its nodes,
 // plus any sub-block ids that appear as nodes in this block.
-int calcColNum(const Block& block, const Graph& graph) {
-    double minCol = std::numeric_limits<double>::max();
-    double maxCol = std::numeric_limits<double>::lowest();
-
+int calcColNum(const Block& block, const Graph& graph, const std::map<std::string, Block>& blocks) {
+    int maxCol = 0;
     for (const auto& pipe : block.pipeNodes) {
+        int pipeCol = 1;
         for (const auto& nid : pipe) {
-            const auto idx = graph.index.find(nid);
-            if (idx != graph.index.end()) {
-                const double c = graph.nodes[idx->second].col;
-                minCol = std::min(minCol, c);
-                maxCol = std::max(maxCol, c);
+            if (blocks.count(nid)) {
+                pipeCol = std::max(pipeCol, blocks.at(nid).colNum);
             }
         }
+        maxCol += pipeCol;
     }
 
-    return (minCol <= maxCol) ? static_cast<int>(maxCol - minCol + 1) : 1;
+    return maxCol;
 }
 
 // Recursively collect blocks. Returns blocks keyed by their id.
@@ -128,7 +125,8 @@ std::string collectBlocksRecursive(
     const std::map<std::string, std::vector<std::string>>& preds,
     std::set<std::string>& visited,
     Graph& graph,
-    std::map<std::string, Block>& result)
+    std::map<std::string, Block>& result,
+    std::map<std::string, std::string>& nodeBlockId)
 {
     const auto it = succs.find(fanoutNodeId);
     if (it == succs.end() || it->second.size() <= 1) {
@@ -161,7 +159,7 @@ std::string collectBlocksRecursive(
             if (it->second.size() > 1) {
                 // Fan-out: stop here, the fan-out node itself is in chain,
                 // its successors will be handled as sub-blocks.
-                const auto curBlockId = collectBlocksRecursive(current, succs, preds, visited, graph, result);
+                const auto curBlockId = collectBlocksRecursive(current, succs, preds, visited, graph, result, nodeBlockId);
                 if (!curBlockId.empty()) {
                     pipe.push_back(curBlockId);
                 }
@@ -184,7 +182,7 @@ std::string collectBlocksRecursive(
             current = next;
         }
     }
-    block.colNum = calcColNum(block, graph);
+    block.colNum = calcColNum(block, graph, result);
 
     graph.log << "  block id=" << block.id << " colNum=" << block.colNum
               << " pipes=" << block.pipeNodes.size() << " [";
@@ -199,12 +197,18 @@ std::string collectBlocksRecursive(
     graph.log << "]\n";
 
     result[block.id] = std::move(block);
+    // Map each node in this block's pipes to the block id
+    for (const auto& entry : result[block.id].pipeNodes) {
+        for (const auto& nid : entry) {
+            nodeBlockId[nid] = block.id;
+        }
+    }
     return block.id;
 }
 
 } // anonymous namespace
 
-std::map<std::string, Block> collectBlocks(Graph& graph) {
+std::map<std::string, Block> collectBlocks(Graph& graph, std::map<std::string, std::string>& nodeBlockId) {
     graph.log << "[blocks] === Collect Blocks ===\n";
 
     const auto succs = buildSuccessors(graph);
@@ -218,7 +222,7 @@ std::map<std::string, Block> collectBlocks(Graph& graph) {
         if (successors.size() <= 1) {
             continue;
         }
-        collectBlocksRecursive(nodeId, succs, preds, visited, graph, result);
+        collectBlocksRecursive(nodeId, succs, preds, visited, graph, result, nodeBlockId);
     }
 
     graph.log << "[blocks] total blocks=" << result.size() << "\n";
