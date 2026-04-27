@@ -91,6 +91,9 @@ void route_edges(Graph& graph) {
         edge.points.push_back({ sx, mid });
         edge.points.push_back({ tx, mid });
         edge.points.push_back({ tx, ty });
+
+        edge.x = (sx + tx) / 2.0;
+        edge.y = mid;
     }
 }
 

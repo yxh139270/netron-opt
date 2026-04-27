@@ -71,6 +71,10 @@ const _copyLayoutResult = (nodes, edges, parsed) => {
             continue;
         }
         edge.points = out.points || [];
+        if (Number.isFinite(out.x) && Number.isFinite(out.y)) {
+            edge.x = out.x;
+            edge.y = out.y;
+        }
     }
 };
 

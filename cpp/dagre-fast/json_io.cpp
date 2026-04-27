@@ -405,7 +405,8 @@ std::string serialize_output_json(const Graph& graph, const Meta& meta) {
         if (i > 0) {
             out << ',';
         }
-        out << "{\"v\":\"" << escape_json(e.v) << "\",\"w\":\"" << escape_json(e.w) << "\",\"points\":[";
+        out << "{\"v\":\"" << escape_json(e.v) << "\",\"w\":\"" << escape_json(e.w)
+            << "\",\"x\":" << e.x << ",\"y\":" << e.y << ",\"points\":[";
         for (size_t j = 0; j < e.points.size(); j++) {
             if (j > 0) {
                 out << ',';

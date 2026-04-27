@@ -29,6 +29,8 @@ struct Edge {
     double width = 0;
     double height = 0;
     bool hasLabel = false;
+    double x = 0;
+    double y = 0;
     std::vector<Point> points;
 };
 

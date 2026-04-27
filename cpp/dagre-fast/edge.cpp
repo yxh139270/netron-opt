@@ -106,6 +106,24 @@ void collapse_virtual_nodes(Graph& graph) {
 
     std::vector<Edge> result;
 
+    const auto assignLabelPos = [](Edge& e) {
+        const auto& pts = e.points;
+        if (pts.empty()) {
+            e.x = 0;
+            e.y = 0;
+            return;
+        }
+        if (pts.size() == 1) {
+            e.x = pts[0].x;
+            e.y = pts[0].y;
+            return;
+        }
+        const size_t left = (pts.size() - 1) / 2;
+        const size_t right = pts.size() / 2;
+        e.x = (pts[left].x + pts[right].x) / 2.0;
+        e.y = (pts[left].y + pts[right].y) / 2.0;
+    };
+
     for (const auto& edge : graph.edges) {
         // Only start from non-virtual sources
         if (virtualIds.count(edge.v)) {
@@ -120,6 +138,8 @@ void collapse_virtual_nodes(Graph& graph) {
             // This edge was NOT split — keep it as-is
             merged.w = edge.w;
             merged.points = edge.points;
+            merged.x = edge.x;
+            merged.y = edge.y;
             result.push_back(merged);
 
             // Mark this as handled so we don't re-add it
@@ -157,6 +177,7 @@ void collapse_virtual_nodes(Graph& graph) {
 
         merged.w = current;  // The final non-virtual target
         merged.points = std::move(points);
+        assignLabelPos(merged);
         result.push_back(merged);
 
         graph.log << "  collapsed chain: \"" << merged.v << "\" -> \"" << merged.w
