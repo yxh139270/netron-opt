@@ -544,13 +544,15 @@ mycelium.Graph = class {
         }
         let edges = [];
         for (const edge of this.edges.values()) {
+            const hasLabel = !!(edge.label && edge.label.label);
             edges.push({
                 v: edge.v,
                 w: edge.w,
                 minlen: edge.label.minlen || 1,
                 weight: edge.label.weight || 1,
                 width: edge.label.width || 0,
-                height: edge.label.height || 0,
+                height: hasLabel ? 45 : 40,
+                hasLabel,
                 labeloffset: edge.label.labeloffset || 10,
                 labelpos: edge.label.labelpos || 'r'
             });

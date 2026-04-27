@@ -26,6 +26,9 @@ struct Node {
 struct Edge {
     std::string v;
     std::string w;
+    double width = 0;
+    double height = 0;
+    bool hasLabel = false;
     std::vector<Point> points;
 };
 

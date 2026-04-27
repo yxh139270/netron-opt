@@ -49,12 +49,18 @@ void insert_virtual_nodes(Graph& graph) {
             Edge seg;
             seg.v = prev;
             seg.w = vid;
+            seg.width = edge.width;
+            seg.height = edge.height;
+            seg.hasLabel = edge.hasLabel;
             newEdges.push_back(seg);
             prev = vid;
         }
         Edge lastSeg;
         lastSeg.v = prev;
         lastSeg.w = edge.w;
+        lastSeg.width = edge.width;
+        lastSeg.height = edge.height;
+        lastSeg.hasLabel = edge.hasLabel;
         newEdges.push_back(lastSeg);
 
         graph.log << "  edge \"" << edge.v << "\" -> \"" << edge.w

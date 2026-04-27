@@ -98,6 +98,21 @@ struct JsonScanner {
         return true;
     }
 
+    bool parse_bool(bool& out) {
+        skip_ws();
+        if (src.compare(pos, 4, "true") == 0) {
+            pos += 4;
+            out = true;
+            return true;
+        }
+        if (src.compare(pos, 5, "false") == 0) {
+            pos += 5;
+            out = false;
+            return true;
+        }
+        return false;
+    }
+
     bool skip_value() {
         skip_ws();
         if (pos >= src.size()) {
@@ -237,6 +252,18 @@ bool parse_edge_object(JsonScanner& s, Edge& edge) {
             }
         } else if (key == "w") {
             if (!s.parse_string(edge.w)) {
+                return false;
+            }
+        } else if (key == "width") {
+            if (!s.parse_number(edge.width)) {
+                return false;
+            }
+        } else if (key == "height") {
+            if (!s.parse_number(edge.height)) {
+                return false;
+            }
+        } else if (key == "hasLabel") {
+            if (!s.parse_bool(edge.hasLabel)) {
                 return false;
             }
         } else {

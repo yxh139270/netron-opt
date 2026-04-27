@@ -309,174 +309,278 @@ void placeLayerCompact(
 // ---------------------------------------------------------------------------
 
 void assign_column(Graph& graph) {
-    std::map<int, std::vector<size_t>> rank_nodes;
-    for (size_t i = 0; i < graph.nodes.size(); i++) {
-        rank_nodes[graph.nodes[i].rank].push_back(i);
-    }
-    for (auto& [rank, ids] : rank_nodes) {
-        (void)rank;
-        std::sort(ids.begin(), ids.end(), [&](size_t a, size_t b) {
-            return graph.nodes[a].v < graph.nodes[b].v;
-        });
-        for (size_t i = 0; i < ids.size(); i++) {
-            graph.nodes[ids[i]].col = static_cast<double>(i);
-        }
-    }
-
     graph.log << "[column] === Column Assignment ===\n";
-    graph.log << "[column] mode=topology-center-v1\n";
+    graph.log << "[column] mode=fanout-average-v3-20260427\n";
+
+    if (graph.nodes.empty()) {
+        graph.log << "[column] empty graph\n";
+        graph.log << "[column] === Column Assignment Done ===\n";
+        return;
+    }
 
     const auto succs = buildSuccessors(graph);
     const auto preds = buildPredecessors(graph);
 
-    auto resolveRankCollisions = [&](int rank) {
-        auto it = rank_nodes.find(rank);
-        if (it == rank_nodes.end() || it->second.size() <= 1) {
+    int maxRank = 0;
+    for (const auto& node : graph.nodes) {
+        maxRank = std::max(maxRank, node.rank);
+    }
+
+    std::vector<std::vector<size_t>> rankNodes(static_cast<size_t>(maxRank + 1));
+    for (size_t i = 0; i < graph.nodes.size(); i++) {
+        const int rank = graph.nodes[i].rank;
+        if (rank >= 0 && rank <= maxRank) {
+            rankNodes[static_cast<size_t>(rank)].push_back(i);
+        }
+    }
+
+    for (auto& ids : rankNodes) {
+        std::sort(ids.begin(), ids.end(), [&](size_t a, size_t b) {
+            return graph.nodes[a].v < graph.nodes[b].v;
+        });
+    }
+
+    std::vector<size_t> allIds(graph.nodes.size());
+    for (size_t i = 0; i < graph.nodes.size(); i++) {
+        allIds[i] = i;
+    }
+    std::sort(allIds.begin(), allIds.end(), [&](size_t a, size_t b) {
+        return graph.nodes[a].v < graph.nodes[b].v;
+    });
+
+    std::vector<size_t> sortedNodes;
+    sortedNodes.reserve(graph.nodes.size());
+    std::unordered_set<std::string> visited;
+
+    std::function<void(size_t)> dfs = [&](size_t idx) {
+        const auto& id = graph.nodes[idx].v;
+        if (visited.count(id)) {
             return;
         }
-        auto& ids = it->second;
+        visited.insert(id);
+        sortedNodes.push_back(idx);
+
+        const auto sit = succs.find(id);
+        if (sit == succs.end()) {
+            return;
+        }
+        for (const auto& next : sit->second) {
+            const auto it = graph.index.find(next);
+            if (it == graph.index.end()) {
+                continue;
+            }
+            dfs(it->second);
+        }
+    };
+
+    for (const auto& id : graph.inputNodes) {
+        const auto it = graph.index.find(id);
+        if (it == graph.index.end()) {
+            continue;
+        }
+        dfs(it->second);
+    }
+    for (const auto idx : rankNodes[0]) {
+        dfs(idx);
+    }
+    for (const auto idx : allIds) {
+        dfs(idx);
+    }
+
+    std::vector<char> hasCol(graph.nodes.size(), 0);
+    int sourceCol = 0;
+    for (const auto idx : sortedNodes) {
+        if (graph.nodes[idx].rank == 0) {
+            graph.nodes[idx].col = static_cast<double>(sourceCol++);
+            hasCol[idx] = 1;
+        }
+    }
+    for (size_t i = 0; i < graph.nodes.size(); i++) {
+        if (!hasCol[i]) {
+            graph.nodes[i].col = 0.0;
+        }
+    }
+
+    auto resolveRankCollisions = [&](int rank) {
+        if (rank < 0 || rank > maxRank) {
+            return;
+        }
+        auto& ids = rankNodes[static_cast<size_t>(rank)];
+        if (ids.size() <= 1) {
+            return;
+        }
         std::sort(ids.begin(), ids.end(), [&](size_t a, size_t b) {
             if (std::abs(graph.nodes[a].col - graph.nodes[b].col) <= 1e-9) {
                 return graph.nodes[a].v < graph.nodes[b].v;
             }
             return graph.nodes[a].col < graph.nodes[b].col;
         });
+
         std::vector<double> original(ids.size());
         std::vector<double> placed(ids.size());
         for (size_t i = 0; i < ids.size(); i++) {
             original[i] = graph.nodes[ids[i]].col;
             placed[i] = original[i];
         }
+
         for (size_t i = 1; i < placed.size(); i++) {
             placed[i] = std::max(placed[i], placed[i - 1] + 1.0);
         }
-        double o = 0.0;
-        double p = 0.0;
+
+        double sumOriginal = 0.0;
+        double sumPlaced = 0.0;
         for (size_t i = 0; i < placed.size(); i++) {
-            o += original[i];
-            p += placed[i];
+            sumOriginal += original[i];
+            sumPlaced += placed[i];
         }
-        const double shift = (o - p) / static_cast<double>(placed.size());
+        const double shift = (sumOriginal - sumPlaced) / static_cast<double>(placed.size());
         for (size_t i = 0; i < ids.size(); i++) {
             graph.nodes[ids[i]].col = placed[i] + shift;
         }
     };
 
-    for (int pass = 0; pass < 10; pass++) {
-        for (auto& [rank, ids] : rank_nodes) {
-            (void)rank;
-            for (const auto idx : ids) {
-                auto& node = graph.nodes[idx];
-                const auto pit = preds.find(node.v);
-                const auto sit = succs.find(node.v);
-                const int indeg = (pit == preds.end()) ? 0 : static_cast<int>(pit->second.size());
-                const int outdeg = (sit == succs.end()) ? 0 : static_cast<int>(sit->second.size());
+    for (int rank = 0; rank < maxRank; rank++) {
+        std::map<std::string, std::vector<double>> proposals;
 
-                if (indeg > 1 || outdeg > 1) {
-                    double sum = 0.0;
-                    int cnt = 0;
-                    if (indeg > 1) {
-                        for (const auto& p : pit->second) {
-                            const auto it = graph.index.find(p);
-                            if (it == graph.index.end()) continue;
-                            sum += graph.nodes[it->second].col;
-                            cnt++;
-                        }
-                    }
-                    if (outdeg > 1) {
-                        for (const auto& s : sit->second) {
-                            const auto it = graph.index.find(s);
-                            if (it == graph.index.end()) continue;
-                            sum += graph.nodes[it->second].col;
-                            cnt++;
-                        }
-                    }
-                    if (cnt > 0) {
-                        node.col = sum / static_cast<double>(cnt);
-                    }
-                } else if (indeg == 1 && outdeg == 1) {
-                    const auto ip = graph.index.find(pit->second[0]);
-                    if (ip != graph.index.end()) {
-                        node.col = graph.nodes[ip->second].col;
-                    }
-                } else if (indeg == 0 && outdeg == 1) {
-                    const auto is = graph.index.find(sit->second[0]);
-                    if (is != graph.index.end()) {
-                        node.col = graph.nodes[is->second].col;
-                    }
-                } else if (indeg == 1 && outdeg == 0) {
-                    const auto ip = graph.index.find(pit->second[0]);
-                    if (ip != graph.index.end()) {
-                        node.col = graph.nodes[ip->second].col;
-                    }
-                }
+        for (const auto idx : rankNodes[static_cast<size_t>(rank)]) {
+            const auto& node = graph.nodes[idx];
+            const auto sit = succs.find(node.v);
+            if (sit == succs.end() || sit->second.empty()) {
+                continue;
             }
-            resolveRankCollisions(rank);
+
+            const auto& outEdges = sit->second;
+            const int k = static_cast<int>(outEdges.size());
+
+            for (int i = 0; i < k; i++) {
+                const std::string& w = outEdges[static_cast<size_t>(i)];
+                const auto it = graph.index.find(w);
+                if (it == graph.index.end()) {
+                    continue;
+                }
+
+                double desired = (k == 1)
+                    ? node.col
+                    : node.col + (static_cast<double>(i) - (k - 1) / 2.0);
+
+                proposals[w].push_back(desired);
+            }
         }
 
-        for (auto rit = rank_nodes.rbegin(); rit != rank_nodes.rend(); ++rit) {
-            const int rank = rit->first;
-            for (const auto idx : rit->second) {
-                auto& node = graph.nodes[idx];
-                const auto pit = preds.find(node.v);
-                const auto sit = succs.find(node.v);
-                const int indeg = (pit == preds.end()) ? 0 : static_cast<int>(pit->second.size());
-                const int outdeg = (sit == succs.end()) ? 0 : static_cast<int>(sit->second.size());
+        const int nextRank = rank + 1;
+        for (const auto idx : rankNodes[static_cast<size_t>(nextRank)]) {
+            auto& node = graph.nodes[idx];
+            const auto fit = proposals.find(node.v);
 
-                if (indeg > 1 || outdeg > 1) {
-                    double sum = 0.0;
-                    int cnt = 0;
-                    if (indeg > 1) {
-                        for (const auto& p : pit->second) {
-                            const auto it = graph.index.find(p);
-                            if (it == graph.index.end()) continue;
-                            sum += graph.nodes[it->second].col;
-                            cnt++;
-                        }
+            const auto pit = preds.find(node.v);
+            const int indeg = (pit == preds.end()) ? 0 : static_cast<int>(pit->second.size());
+
+            if (indeg > 1) {
+                double sum = 0.0;
+                int count = 0;
+                for (const auto& p : pit->second) {
+                    const auto it = graph.index.find(p);
+                    if (it == graph.index.end()) {
+                        continue;
                     }
-                    if (outdeg > 1) {
-                        for (const auto& s : sit->second) {
-                            const auto it = graph.index.find(s);
-                            if (it == graph.index.end()) continue;
-                            sum += graph.nodes[it->second].col;
-                            cnt++;
-                        }
-                    }
-                    if (cnt > 0) {
-                        node.col = sum / static_cast<double>(cnt);
-                    }
-                } else if (indeg == 1 && outdeg == 1) {
-                    const auto is = graph.index.find(sit->second[0]);
-                    if (is != graph.index.end()) {
-                        node.col = graph.nodes[is->second].col;
-                    }
-                } else if (indeg == 0 && outdeg == 1) {
-                    const auto is = graph.index.find(sit->second[0]);
-                    if (is != graph.index.end()) {
-                        node.col = graph.nodes[is->second].col;
-                    }
-                } else if (indeg == 1 && outdeg == 0) {
-                    const auto ip = graph.index.find(pit->second[0]);
-                    if (ip != graph.index.end()) {
-                        node.col = graph.nodes[ip->second].col;
-                    }
+                    sum += graph.nodes[it->second].col;
+                    count++;
+                }
+                if (count > 0) {
+                    node.col = sum / static_cast<double>(count);
+                }
+                continue;
+            }
+
+            if (fit != proposals.end() && !fit->second.empty()) {
+                double sum = 0.0;
+                for (double value : fit->second) {
+                    sum += value;
+                }
+                node.col = sum / static_cast<double>(fit->second.size());
+            } else if (indeg == 1) {
+                const auto ip = graph.index.find(pit->second[0]);
+                if (ip != graph.index.end()) {
+                    node.col = graph.nodes[ip->second].col;
                 }
             }
-            resolveRankCollisions(rank);
+        }
+
+        resolveRankCollisions(nextRank);
+    }
+
+    // Post-pass for lantern style: collect each virtual chain, then set all
+    // virtual nodes in that chain to the maximum col on that chain.
+    std::unordered_set<std::string> virtualVisited;
+    for (const auto& node : graph.nodes) {
+        if (!node.isVirtual || virtualVisited.count(node.v)) {
+            continue;
+        }
+
+        std::string head = node.v;
+        while (true) {
+            const auto pit = preds.find(head);
+            if (pit == preds.end() || pit->second.size() != 1) {
+                break;
+            }
+            const auto ip = graph.index.find(pit->second[0]);
+            if (ip == graph.index.end() || !graph.nodes[ip->second].isVirtual) {
+                break;
+            }
+            head = pit->second[0];
+        }
+
+        std::vector<size_t> chain;
+        std::string cur = head;
+        while (true) {
+            if (virtualVisited.count(cur)) {
+                break;
+            }
+            const auto ic = graph.index.find(cur);
+            if (ic == graph.index.end() || !graph.nodes[ic->second].isVirtual) {
+                break;
+            }
+
+            virtualVisited.insert(cur);
+            chain.push_back(ic->second);
+
+            const auto sit = succs.find(cur);
+            if (sit == succs.end() || sit->second.size() != 1) {
+                break;
+            }
+            const auto inext = graph.index.find(sit->second[0]);
+            if (inext == graph.index.end() || !graph.nodes[inext->second].isVirtual) {
+                break;
+            }
+            cur = sit->second[0];
+        }
+
+        if (chain.empty()) {
+            continue;
+        }
+        double maxCol = graph.nodes[chain[0]].col;
+        for (const auto idx : chain) {
+            maxCol = std::max(maxCol, graph.nodes[idx].col);
+        }
+        for (const auto idx : chain) {
+            graph.nodes[idx].col = maxCol;
         }
     }
 
-    // 10) Debug output
     graph.log << "[column] final placement by rank:\n";
-    for (auto& [rank, ids] : rank_nodes) {
+    for (int rank = 0; rank <= maxRank; rank++) {
+        auto ids = rankNodes[static_cast<size_t>(rank)];
         std::sort(ids.begin(), ids.end(), [&](size_t a, size_t b) {
-            if (graph.nodes[a].col == graph.nodes[b].col)
+            if (std::abs(graph.nodes[a].col - graph.nodes[b].col) <= 1e-9) {
                 return graph.nodes[a].v < graph.nodes[b].v;
+            }
             return graph.nodes[a].col < graph.nodes[b].col;
         });
         graph.log << "  rank=" << rank << ": ";
         for (size_t i = 0; i < ids.size(); i++) {
-            if (i > 0) graph.log << ", ";
+            if (i > 0) {
+                graph.log << ", ";
+            }
             graph.log << graph.nodes[ids[i]].v << "@" << graph.nodes[ids[i]].col;
         }
         graph.log << "\n";
