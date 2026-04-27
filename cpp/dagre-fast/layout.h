@@ -24,8 +24,8 @@ struct Node {
 };
 
 struct Edge {
-    std::string v;
-    std::string w;
+    std::string src;
+    std::string dst;
     double width = 0;
     double height = 0;
     bool hasLabel = false;

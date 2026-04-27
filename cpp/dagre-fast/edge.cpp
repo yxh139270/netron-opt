@@ -12,8 +12,8 @@ void insert_virtual_nodes(Graph& graph) {
     std::vector<Edge> newEdges;
 
     for (auto& edge : graph.edges) {
-        const auto itV = graph.index.find(edge.v);
-        const auto itW = graph.index.find(edge.w);
+        const auto itV = graph.index.find(edge.src);
+        const auto itW = graph.index.find(edge.dst);
         if (itV == graph.index.end() || itW == graph.index.end()) {
             newEdges.push_back(edge);
             continue;
@@ -44,11 +44,11 @@ void insert_virtual_nodes(Graph& graph) {
             chain.push_back(vid);
         }
 
-        std::string prev = edge.v;
+        std::string prev = edge.src;
         for (const auto& vid : chain) {
             Edge seg;
-            seg.v = prev;
-            seg.w = vid;
+            seg.src = prev;
+            seg.dst = vid;
             seg.width = edge.width;
             seg.height = edge.height;
             seg.hasLabel = edge.hasLabel;
@@ -56,14 +56,14 @@ void insert_virtual_nodes(Graph& graph) {
             prev = vid;
         }
         Edge lastSeg;
-        lastSeg.v = prev;
-        lastSeg.w = edge.w;
+        lastSeg.src = prev;
+        lastSeg.dst = edge.dst;
         lastSeg.width = edge.width;
         lastSeg.height = edge.height;
         lastSeg.hasLabel = edge.hasLabel;
         newEdges.push_back(lastSeg);
 
-        graph.log << "  edge \"" << edge.v << "\" -> \"" << edge.w
+        graph.log << "  edge \"" << edge.src << "\" -> \"" << edge.dst
                   << "\" span=" << span << ": inserted " << chain.size()
                   << " virtual nodes\n";
     }
@@ -95,7 +95,7 @@ void collapse_virtual_nodes(Graph& graph) {
     // Build adjacency: for each node id, list of outgoing edges (index into graph.edges)
     std::unordered_map<std::string, std::vector<size_t>> outEdges;
     for (size_t i = 0; i < graph.edges.size(); i++) {
-        outEdges[graph.edges[i].v].push_back(i);
+        outEdges[graph.edges[i].src].push_back(i);
     }
 
     // For each non-virtual source, find the original target by following
@@ -126,38 +126,38 @@ void collapse_virtual_nodes(Graph& graph) {
 
     for (const auto& edge : graph.edges) {
         // Only start from non-virtual sources
-        if (virtualIds.count(edge.v)) {
+        if (virtualIds.count(edge.src)) {
             continue;
         }
 
         Edge merged;
-        merged.v = edge.v;
+        merged.src = edge.src;
 
         // Check if this edge directly goes to a non-virtual target
-        if (!virtualIds.count(edge.w)) {
+        if (!virtualIds.count(edge.dst)) {
             // This edge was NOT split — keep it as-is
-            merged.w = edge.w;
+            merged.dst = edge.dst;
             merged.points = edge.points;
             merged.x = edge.x;
             merged.y = edge.y;
             result.push_back(merged);
 
             // Mark this as handled so we don't re-add it
-            graph.log << "  kept edge: \"" << merged.v << "\" -> \"" << merged.w
+            graph.log << "  kept edge: \"" << merged.src << "\" -> \"" << merged.dst
                       << "\" points=" << merged.points.size() << "\n";
             continue;
         }
 
         // This edge starts a chain: follow virtual nodes to find the real target
         std::vector<Point> points;
-        std::string current = edge.v;
+        std::string current = edge.src;
         std::set<std::string> visited;
 
         // Add points from the first segment
         for (const auto& p : edge.points) {
             points.push_back(p);
         }
-        current = edge.w;
+        current = edge.dst;
 
         // Follow the chain
         while (virtualIds.count(current) && !visited.count(current)) {
@@ -172,15 +172,15 @@ void collapse_virtual_nodes(Graph& graph) {
             for (const auto& p : nextEdge.points) {
                 points.push_back(p);
             }
-            current = nextEdge.w;
+            current = nextEdge.dst;
         }
 
-        merged.w = current;  // The final non-virtual target
+        merged.dst = current;  // The final non-virtual target
         merged.points = std::move(points);
         assignLabelPos(merged);
         result.push_back(merged);
 
-        graph.log << "  collapsed chain: \"" << merged.v << "\" -> \"" << merged.w
+        graph.log << "  collapsed chain: \"" << merged.src << "\" -> \"" << merged.dst
                   << "\" points=" << result.back().points.size() << "\n";
     }
 

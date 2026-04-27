@@ -27,7 +27,7 @@ void assign_coord(Graph& graph) {
         if (!(gap > 0.0)) {
             gap = edge.hasLabel ? 45.0 : 40.0;
         }
-        incoming[edge.w].push_back({ edge.v, gap });
+        incoming[edge.dst].push_back({ edge.src, gap });
     }
 
     std::unordered_map<int, double> rank_y;

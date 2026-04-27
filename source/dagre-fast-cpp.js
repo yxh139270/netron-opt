@@ -62,7 +62,11 @@ const _copyLayoutResult = (nodes, edges, parsed) => {
         node.y = out.y;
     }
 
-    const edgeByKey = new Map((parsed.edges || []).map((edge) => [`${edge.v}->${edge.w}`, edge]));
+    const edgeByKey = new Map((parsed.edges || []).map((edge) => {
+        const src = edge.src !== undefined ? edge.src : edge.v;
+        const dst = edge.dst !== undefined ? edge.dst : edge.w;
+        return [`${src}->${dst}`, edge];
+    }));
     for (const edge of edges || []) {
         const out = edgeByKey.get(`${edge.v}->${edge.w}`);
         if (!out) {

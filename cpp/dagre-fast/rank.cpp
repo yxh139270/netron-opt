@@ -14,8 +14,8 @@ void assign_rank(Graph& graph) {
     std::vector<std::vector<size_t>> in(n);
 
     for (const auto& edge : graph.edges) {
-        const auto itV = graph.index.find(edge.v);
-        const auto itW = graph.index.find(edge.w);
+        const auto itV = graph.index.find(edge.src);
+        const auto itW = graph.index.find(edge.dst);
         if (itV == graph.index.end() || itW == graph.index.end()) {
             continue;
         }
@@ -62,10 +62,10 @@ void assign_rank(Graph& graph) {
     for (const auto id : topo) {
         int best = 0;
         for (const auto& edge : graph.edges) {
-            if (edge.w != graph.nodes[id].v) {
+            if (edge.dst != graph.nodes[id].v) {
                 continue;
             }
-            const auto itV = graph.index.find(edge.v);
+            const auto itV = graph.index.find(edge.src);
             if (itV == graph.index.end()) {
                 continue;
             }
@@ -83,10 +83,10 @@ void assign_rank(Graph& graph) {
         int best = graph.nodes[id].rank;
         int changeBest = INT32_MAX;
         for (const auto& edge : graph.edges) {
-            if (edge.v != graph.nodes[id].v) {
+            if (edge.src != graph.nodes[id].v) {
                 continue;
             }
-            const auto itW = graph.index.find(edge.w);
+            const auto itW = graph.index.find(edge.dst);
             if (itW == graph.index.end()) {
                 continue;
             }

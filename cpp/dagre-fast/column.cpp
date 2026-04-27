@@ -16,7 +16,7 @@ namespace {
 std::map<std::string, std::vector<std::string>> buildSuccessors(const Graph& graph) {
     std::map<std::string, std::vector<std::string>> succs;
     for (const auto& edge : graph.edges) {
-        succs[edge.v].push_back(edge.w);
+        succs[edge.src].push_back(edge.dst);
     }
     return succs;
 }
@@ -24,7 +24,7 @@ std::map<std::string, std::vector<std::string>> buildSuccessors(const Graph& gra
 std::map<std::string, std::vector<std::string>> buildPredecessors(const Graph& graph) {
     std::map<std::string, std::vector<std::string>> preds;
     for (const auto& edge : graph.edges) {
-        preds[edge.w].push_back(edge.v);
+        preds[edge.dst].push_back(edge.src);
     }
     return preds;
 }

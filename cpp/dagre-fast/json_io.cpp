@@ -246,12 +246,12 @@ bool parse_edge_object(JsonScanner& s, Edge& edge) {
         if (!s.parse_string(key) || !s.consume(':')) {
             return false;
         }
-        if (key == "v") {
-            if (!s.parse_string(edge.v)) {
+        if (key == "src" || key == "v") {
+            if (!s.parse_string(edge.src)) {
                 return false;
             }
-        } else if (key == "w") {
-            if (!s.parse_string(edge.w)) {
+        } else if (key == "dst" || key == "w") {
+            if (!s.parse_string(edge.dst)) {
                 return false;
             }
         } else if (key == "width") {
@@ -277,7 +277,7 @@ bool parse_edge_object(JsonScanner& s, Edge& edge) {
             }
         }
     }
-    return !edge.v.empty() && !edge.w.empty();
+    return !edge.src.empty() && !edge.dst.empty();
 }
 
 bool parse_layout_object(JsonScanner& s, LayoutOptions& options) {
@@ -405,7 +405,7 @@ std::string serialize_output_json(const Graph& graph, const Meta& meta) {
         if (i > 0) {
             out << ',';
         }
-        out << "{\"v\":\"" << escape_json(e.v) << "\",\"w\":\"" << escape_json(e.w)
+        out << "{\"src\":\"" << escape_json(e.src) << "\",\"dst\":\"" << escape_json(e.dst)
             << "\",\"x\":" << e.x << ",\"y\":" << e.y << ",\"points\":[";
         for (size_t j = 0; j < e.points.size(); j++) {
             if (j > 0) {
